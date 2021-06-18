@@ -12,58 +12,77 @@
 #include <mdns.h>
 #include <string.h>
 
-/* Negative means infinite retries */
+// Negative means infinite retries
 #define NUM_RETRIES -1
 
-/* FreeRTOS event group to signal when we are connected*/
+static StaticEventGroup_t wifi_event_group_static;
 static EventGroupHandle_t wifi_event_group;
+
+static StaticSemaphore_t local_ip_mutex_static;
+static SemaphoreHandle_t local_ip_mutex;
 
 /* The event group allows multiple bits for each event, but we only care about two events:
  * - we are connected to the AP with an IP
  * - we failed to connect after the maximum amount of retries */
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT BIT1
+#define WIFI_CONNECTED_BIT (1ULL << 0)
+#define WIFI_FAIL_BIT (1ULL << 1)
 
 static int retry_count = 0;
 static char *local_ip = NULL;
 static char *hostname = NULL;
 
 const char *wifi_get_local_ip() {
-    return local_ip;
-}
+    while (xSemaphoreTake(local_ip_mutex, portMAX_DELAY) == pdFALSE)
+        ;
 
-static void hostname_set(const char *hostname) {
-    ESP_LOGI(TAG, "hostname set to: %s", hostname);
+    char *local_ip_copy = strdup(local_ip);
 
-    ESP_ERROR_CHECK(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, hostname));
-    ESP_ERROR_CHECK(mdns_init());
-    ESP_ERROR_CHECK(mdns_hostname_set(hostname));
+    xSemaphoreGive(local_ip_mutex);
+
+    return local_ip_copy;
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        hostname_set(hostname);
+        ESP_LOGI(TAG, "hostname set to: %s", hostname);
+
+        ESP_ERROR_CHECK(tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_STA, hostname));
+        ESP_ERROR_CHECK(mdns_init());
+        ESP_ERROR_CHECK(mdns_hostname_set(hostname));
+
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        // FIXME There is a thread safety issue here, we should take and release a lock to change `local_ip`.
+        while (xSemaphoreTake(local_ip_mutex, portMAX_DELAY) == pdFALSE)
+            ;
+
         void *to_free = local_ip;
         local_ip = NULL;
+
+        xSemaphoreGive(local_ip_mutex);
+
         free(to_free);
 
         if (NUM_RETRIES < 0 || retry_count < NUM_RETRIES) {
             esp_wifi_connect();
             retry_count++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
+            ESP_LOGW(TAG, "retry to connect to the AP");
         } else {
             xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT);
         }
-        ESP_LOGI(TAG, "connect to the AP fail");
+        ESP_LOGW(TAG, "failed to connect to the AP");
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
 
         char *buff = (char *) malloc(16);
         snprintf(buff, 16, IPSTR, IP2STR(&event->ip_info.ip));
+
+        while (xSemaphoreTake(local_ip_mutex, portMAX_DELAY) == pdFALSE)
+            ;
+
+        assert(!local_ip);
         local_ip = buff;
+
+        xSemaphoreGive(local_ip_mutex);
 
         ESP_LOGI(TAG, "(%d retries) got ip: %s", retry_count, local_ip);
         retry_count = 0;
@@ -72,7 +91,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 }
 
 static void wifi_init_sta(const char *ssid, const char *pass) {
-    wifi_event_group = xEventGroupCreate();
+    wifi_event_group = xEventGroupCreateStatic(&wifi_event_group_static);
+    local_ip_mutex = xSemaphoreCreateMutexStatic(&local_ip_mutex_static);
+
     ESP_ERROR_CHECK(esp_netif_init());
 
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -117,11 +138,11 @@ static void wifi_init_sta(const char *ssid, const char *pass) {
     /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
      * happened. */
     if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "Connected to AP SSID: %s", ssid);
+        ESP_LOGI(TAG, "connected to AP SSID: %s", ssid);
     } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(TAG, "Failed to connect to SSID: %s", pass);
+        ESP_LOGI(TAG, "failed to connect to SSID: %s", pass);
     } else {
-        ESP_LOGE(TAG, "UNEXPECTED EVENT");
+        ESP_LOGE(TAG, "unexpected event: 0x%X", bits);
     }
 }
 

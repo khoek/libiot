@@ -8,6 +8,7 @@
 #include "gpio.h"
 #include "libiot.h"
 #include "mqtt.h"
+#include "reset_info.h"
 #include "wifi.h"
 
 static esp_err_t nvs_init() {
@@ -45,20 +46,20 @@ static esp_err_t spiffs_init() {
 void libiot_run(struct node_config *cfg) {
     ESP_LOGI(TAG, "startup");
 
-    RESET_REASON rr = rtc_get_reset_reason(0);
-    // FIXME MQTT publish this!
-
+    reset_info_init();
     gpio_init();
     ESP_ERROR_CHECK(nvs_init());
-    // DISABLE FOR NOW! (fix!)
-    // ESP_ERROR_CHECK(spiffs_init());
+    if (cfg->enable_spiffs) {
+        ESP_ERROR_CHECK(spiffs_init());
+    }
 
     ESP_LOGI(TAG, "calling app_init()");
     cfg->app_init();
 
     ESP_LOGI(TAG, "init wifi/mqtt");
     wifi_init(cfg->ssid, cfg->pass, cfg->name);
-    mqtt_init(cfg->uri, cfg->cert, cfg->key, cfg->name, cfg->mqtt_pass, cfg->mqtt_cb);
+    // Note that if `cfg->mqtt_task_stack_size == 0` then a default is used.
+    mqtt_init(cfg->uri, cfg->cert, cfg->key, cfg->name, cfg->mqtt_pass, cfg->mqtt_task_stack_size, cfg->mqtt_cb);
 
     ESP_LOGI(TAG, "startup finished, calling app_run()");
     cfg->app_run();

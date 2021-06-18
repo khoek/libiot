@@ -1,5 +1,5 @@
-#ifndef LIBIOT_GPIO_H
-#define LIBIOT_GPIO_H
+#ifndef __LIB__LIBIOT_GPIO_H
+#define __LIB__LIBIOT_GPIO_H
 
 #include "private.h"
 
