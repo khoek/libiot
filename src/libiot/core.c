@@ -57,9 +57,18 @@ void libiot_run(struct node_config *cfg) {
     cfg->app_init();
 
     ESP_LOGI(TAG, "init wifi/mqtt");
-    wifi_init(cfg->ssid, cfg->pass, cfg->name);
-    // Note that if `cfg->mqtt_task_stack_size == 0` then a default is used.
-    mqtt_init(cfg->uri, cfg->cert, cfg->key, cfg->name, cfg->mqtt_pass, cfg->mqtt_task_stack_size, cfg->mqtt_cb);
+    if (cfg->ssid) {
+        wifi_init(cfg->ssid, cfg->pass, cfg->name);
+
+        // Note that if `cfg->mqtt_task_stack_size == 0` then a default is used.
+        if (cfg->uri) {
+            mqtt_init(cfg->uri, cfg->cert, cfg->key, cfg->name, cfg->mqtt_pass, cfg->mqtt_task_stack_size, cfg->mqtt_cb);
+        } else {
+            ESP_LOGI(TAG, "mqtt disabled");
+        }
+    } else {
+        ESP_LOGI(TAG, "wifi disabled");
+    }
 
     ESP_LOGI(TAG, "startup finished, calling app_run()");
     cfg->app_run();
