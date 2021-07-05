@@ -98,7 +98,6 @@ p97lq3A=\n\
 
 static char topic_subscribe_wildcard_buff[256];
 static char topic_status_buff[256];
-static char topic_rssi_buff[256];
 static char topic_id_buff[256];
 static char topic_last_reset_buff[256];
 static char topic_restart_buff[256];
@@ -112,7 +111,7 @@ static SemaphoreHandle_t startup_sem;
 static esp_mqtt_client_handle_t client = NULL;
 
 static void send_ping_resp() {
-    const char *msg = json_build_state_up();
+    char *msg = json_build_state_up();
     assert(msg);
     assert(esp_mqtt_client_publish(client, topic_status_buff, msg, 0, 2, 1) >= 0);
     free(msg);
