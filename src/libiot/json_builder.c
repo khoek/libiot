@@ -1,3 +1,5 @@
+#include "json_builder.h"
+
 #include <cJSON.h>
 #include <esp_log.h>
 #include <esp_ota_ops.h>

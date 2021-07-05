@@ -193,7 +193,7 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
     snprintf(topic_restart_buff, sizeof(topic_restart_buff), TOPIC_RESTART_FMT, name);
 
     msg_id = json_build_system_id();
-    msg_last_reset = json_build_system_id();
+    msg_last_reset = json_build_last_reset();
 
     assert(msg_id);
     assert(msg_last_reset);
