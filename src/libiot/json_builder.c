@@ -4,8 +4,69 @@
 #include <esp_log.h>
 #include <esp_ota_ops.h>
 #include <esp_system.h>
+#include <esp_wifi.h>
 
 #include "reset_info.h"
+
+char *json_build_state_up() {
+    wifi_ap_record_t ap;
+    esp_wifi_sta_get_ap_info(&ap);
+
+    cJSON *json_root = cJSON_CreateObject();
+    if (!json_root) {
+        goto build_state_up_fail;
+    }
+
+    cJSON *json_state = cJSON_CreateStringReference("up");
+    if (!json_state) {
+        goto build_state_up_fail;
+    }
+    cJSON_AddItemToObject(json_root, "state", json_state);
+
+    cJSON *json_wifi_rssi = cJSON_CreateNumber(ap.rssi);
+    if (!json_wifi_rssi) {
+        goto build_state_up_fail;
+    }
+    cJSON_AddItemToObject(json_root, "wifi_rssi", json_wifi_rssi);
+
+    char *msg = cJSON_PrintUnformatted(json_root);
+    cJSON_Delete(json_root);
+    return msg;
+
+build_state_up_fail:
+    ESP_LOGE(TAG, "%s: JSON fail", __func__);
+
+    // It is safe to call this with `json_root == NULL`.
+    cJSON_Delete(json_root);
+    return NULL;
+}
+
+char *json_build_state_down() {
+    wifi_ap_record_t ap;
+    esp_wifi_sta_get_ap_info(&ap);
+
+    cJSON *json_root = cJSON_CreateObject();
+    if (!json_root) {
+        goto build_state_down_fail;
+    }
+
+    cJSON *json_state = cJSON_CreateStringReference("down");
+    if (!json_state) {
+        goto build_state_down_fail;
+    }
+    cJSON_AddItemToObject(json_root, "state", json_state);
+
+    char *msg = cJSON_PrintUnformatted(json_root);
+    cJSON_Delete(json_root);
+    return msg;
+
+build_state_down_fail:
+    ESP_LOGE(TAG, "%s: JSON fail", __func__);
+
+    // It is safe to call this with `json_root == NULL`.
+    cJSON_Delete(json_root);
+    return NULL;
+}
 
 char *json_build_system_id() {
     esp_chip_info_t chip_info;

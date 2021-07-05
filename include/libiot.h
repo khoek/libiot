@@ -3,17 +3,13 @@
 
 #include <mqtt_client.h>
 
+#ifndef IOT_MQTT_ROOT_NAMESPACE
 #define IOT_MQTT_ROOT_NAMESPACE "hoek/"
+#endif
 
 // e.g. is 'hoek/cmd/<cmd>'.
 #define IOT_MQTT_COMMAND_TOPIC(cmd_literal) \
     IOT_MQTT_ROOT_NAMESPACE "cmd/" cmd_literal
-
-// e.g. is 'hoek/log/<log>'.
-#define IOT_MQTT_LOG_TOPIC(log_literal) \
-    IOT_MQTT_ROOT_NAMESPACE "log/" log_literal
-
-#define IOT_MQTT_LOG_NOTICE IOT_MQTT_LOG_TOPIC("notice")
 
 // e.g. 'hoek/iot/<device_name>/<name>'.
 #define IOT_MQTT_DEVICE_TOPIC(device_name_literal, name_literal) \

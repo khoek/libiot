@@ -4,6 +4,8 @@
 #include "private.h"
 #include "reset_info.h"
 
+char *json_build_state_up();
+char *json_build_state_down();
 char *json_build_system_id();
 char *json_build_last_reset();
 

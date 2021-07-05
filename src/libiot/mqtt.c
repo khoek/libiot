@@ -96,11 +96,9 @@ p97lq3A=\n\
 #define TOPIC_LAST_RESET_FMT IOT_MQTT_DEVICE_TOPIC("%s", INFO_TOPIC_PREFIX "/last_reset")
 #define TOPIC_RESTART_FMT IOT_MQTT_DEVICE_TOPIC("%s", INFO_TOPIC_PREFIX "/restart")
 
-#define STATUS_UP "up"
-#define STATUS_DOWN "down"
-
 static char topic_subscribe_wildcard_buff[256];
 static char topic_status_buff[256];
+static char topic_rssi_buff[256];
 static char topic_id_buff[256];
 static char topic_last_reset_buff[256];
 static char topic_restart_buff[256];
@@ -112,6 +110,13 @@ static StaticSemaphore_t startup_sem_buffer;
 static SemaphoreHandle_t startup_sem;
 
 static esp_mqtt_client_handle_t client = NULL;
+
+static void send_ping_resp() {
+    const char *msg = json_build_state_up();
+    assert(msg);
+    assert(esp_mqtt_client_publish(client, topic_status_buff, msg, 0, 2, 1) >= 0);
+    free(msg);
+}
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     ESP_LOGD(TAG, "mqtt event: base='%s', event_id=%d", base, event_id);
@@ -125,7 +130,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             // fancy here to periodically check?
             assert(esp_mqtt_client_subscribe(client, IOT_MQTT_COMMAND_TOPIC("ping"), 0) >= 0);
             assert(esp_mqtt_client_subscribe(client, topic_subscribe_wildcard_buff, 0) >= 0);
-            assert(esp_mqtt_client_publish(client, topic_status_buff, STATUS_UP, 0, 2, 1) >= 0);
+
+            // Send the up status message and WiFi RSSI info
+            send_ping_resp();
 
             // Publish device hardware information and the last reset reason
             assert(esp_mqtt_client_publish(client, topic_id_buff, msg_id, 0, 2, 1) >= 0);
@@ -158,7 +165,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             } else if (!strncmp(IOT_MQTT_COMMAND_TOPIC("ping"), event->topic, event->topic_len)) {
                 ESP_LOGI(TAG, "mqtt: ping");
                 // Re-publish up status whenever pinged
-                assert(esp_mqtt_client_publish(client, topic_status_buff, STATUS_UP, 0, 2, 1) >= 0);
+                send_ping_resp();
             }
             break;
         }
@@ -215,7 +222,7 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
 
         // "Last Will and Testament" status (down) message
         .lwt_topic = topic_status_buff,
-        .lwt_msg = STATUS_DOWN,
+        .lwt_msg = json_build_state_down(),
         .lwt_qos = 2,
         .lwt_retain = 1,
     };
