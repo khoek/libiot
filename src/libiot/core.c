@@ -4,12 +4,17 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs_flash.h>
+#include <stdio.h>
 
 #include "gpio.h"
 #include "libiot.h"
 #include "mqtt.h"
 #include "reset_info.h"
 #include "wifi.h"
+
+#ifndef LIBIOT_DISABLE_OTA
+#include "ota.h"
+#endif
 
 static esp_err_t nvs_init() {
     ESP_LOGI(TAG, "init");
@@ -53,12 +58,16 @@ void libiot_run(struct node_config *cfg) {
         ESP_ERROR_CHECK(spiffs_init());
     }
 
+#ifndef LIBIOT_DISABLE_OTA
+    ESP_ERROR_CHECK(ota_init());
+#endif
+
     ESP_LOGI(TAG, "calling app_init()");
     cfg->app_init();
 
     ESP_LOGI(TAG, "init wifi/mqtt");
     if (cfg->ssid) {
-        wifi_init(cfg->ssid, cfg->pass, cfg->name);
+        wifi_init(cfg->ssid, cfg->pass, cfg->name, cfg->ps_type);
 
         // Note that if `cfg->mqtt_task_stack_size == 0` then a default is used.
         if (cfg->uri) {
@@ -70,8 +79,11 @@ void libiot_run(struct node_config *cfg) {
         ESP_LOGI(TAG, "wifi disabled");
     }
 
+    void (*app_run)() = cfg->app_run;
+    free(cfg);
+
     ESP_LOGI(TAG, "startup finished, calling app_run()");
-    cfg->app_run();
+    app_run();
 }
 
 static void task_run(void *arg) {
@@ -81,5 +93,23 @@ static void task_run(void *arg) {
 }
 
 void libiot_startup(struct node_config *cfg) {
-    xTaskCreate(&task_run, "libiot_run", 32768, cfg, 5, NULL);
+    struct node_config *cfg_copy = malloc(sizeof(struct node_config));
+    memcpy(cfg_copy, cfg, sizeof(struct node_config));
+
+    xTaskCreate(&task_run, "libiot_run", 32768, cfg_copy, 5, NULL);
+}
+
+void libiot_logf_error(const char *tag, const char *format, ...) {
+    va_list va;
+    va_start(va, format);
+
+    char *msg;
+    assert(vasprintf(&msg, format, va) >= 0);
+
+    va_end(va);
+
+    ESP_LOGE(tag, "%s", msg);
+    libiot_mqtt_publishf_local(MQTT_TOPIC_INFO("error"), 2, 0, "%s: %s", tag, msg);
+
+    free(msg);
 }

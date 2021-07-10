@@ -31,7 +31,7 @@ static int retry_count = 0;
 static char *local_ip = NULL;
 static char *hostname = NULL;
 
-const char *wifi_get_local_ip() {
+const char *libiot_get_local_ip() {
     while (xSemaphoreTake(local_ip_mutex, portMAX_DELAY) == pdFALSE)
         ;
 
@@ -90,7 +90,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     }
 }
 
-static void wifi_init_sta(const char *ssid, const char *pass) {
+static void wifi_init_sta(const char *ssid, const char *pass, wifi_ps_type_t ps_type) {
+    ESP_LOGI(TAG, "wifi init start");
+
     wifi_event_group = xEventGroupCreateStatic(&wifi_event_group_static);
     local_ip_mutex = xSemaphoreCreateMutexStatic(&local_ip_mutex_static);
 
@@ -120,11 +122,12 @@ static void wifi_init_sta(const char *ssid, const char *pass) {
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(ps_type));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "wifi_init_sta finished");
+    ESP_LOGI(TAG, "wifi init done, waiting for connection");
 
-    // Can comment out below (and boot without already having WiFi) once (I think) the fix for
+    // TODO Can comment out below (and boot without already having WiFi) once (I think) the fix for
     // https://github.com/espressif/esp-idf/issues/6878 makes its way to ESP-IDF.
 
     /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
@@ -146,8 +149,7 @@ static void wifi_init_sta(const char *ssid, const char *pass) {
     }
 }
 
-void wifi_init(const char *ssid, const char *pass, const char *name) {
-    ESP_LOGI(TAG, "wifi_init");
+void wifi_init(const char *ssid, const char *pass, const char *name, wifi_ps_type_t ps_type) {
     hostname = strdup(name);
-    wifi_init_sta(ssid, pass);
+    wifi_init_sta(ssid, pass, ps_type);
 }

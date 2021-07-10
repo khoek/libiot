@@ -2,10 +2,14 @@
 
 #include <esp_log.h>
 #include <mqtt_client.h>
+#include <stdio.h>
 
 #include "gpio.h"
 #include "json_builder.h"
-#include "reset_info.h"
+
+#ifndef LIBIOT_DISABLE_OTA
+#include "ota.h"
+#endif
 
 /*
     The certficate hierachy works like this (each bullet point is a certificate):
@@ -88,21 +92,8 @@ CdJTMkJvdxM7dl8PrDi499Zl3DUaZ10/quaufw3j+pel2oLszSkrkEAsggdndArG\n\
 p97lq3A=\n\
 -----END CERTIFICATE-----"
 
-#define INFO_TOPIC_PREFIX "_info"
-
-#define TOPIC_SUBSCRIBE_WILDCARD_FMT IOT_MQTT_DEVICE_TOPIC("%s", "#")
-#define TOPIC_STATUS_FMT IOT_MQTT_DEVICE_TOPIC("%s", INFO_TOPIC_PREFIX "/status")
-#define TOPIC_id_FMT IOT_MQTT_DEVICE_TOPIC("%s", INFO_TOPIC_PREFIX "/id")
-#define TOPIC_LAST_RESET_FMT IOT_MQTT_DEVICE_TOPIC("%s", INFO_TOPIC_PREFIX "/last_reset")
-#define TOPIC_RESTART_FMT IOT_MQTT_DEVICE_TOPIC("%s", INFO_TOPIC_PREFIX "/restart")
-
-static char topic_subscribe_wildcard_buff[256];
-static char topic_status_buff[256];
-static char topic_id_buff[256];
-static char topic_last_reset_buff[256];
-static char topic_restart_buff[256];
-static char *msg_id = NULL;
-static char *msg_last_reset = NULL;
+static char device_topic_root[64];
+static size_t device_topic_root_len;
 
 static void (*mqtt_event_handler_cb)(esp_mqtt_event_handle_t event);
 static StaticSemaphore_t startup_sem_buffer;
@@ -110,11 +101,51 @@ static SemaphoreHandle_t startup_sem;
 
 static esp_mqtt_client_handle_t client = NULL;
 
-static void send_ping_resp() {
-    char *msg = json_build_state_up();
+static void send_resp(const char *suffix, char *msg) {
     assert(msg);
-    assert(esp_mqtt_client_publish(client, topic_status_buff, msg, 0, 2, 1) >= 0);
+    libiot_mqtt_publish_local(suffix, 2, 1, msg);
     free(msg);
+}
+
+void mqtt_send_ping_resp() {
+    send_resp(MQTT_TOPIC_INFO("status"), json_build_state_up());
+}
+
+void mqtt_send_refresh_resp() {
+    send_resp(MQTT_TOPIC_INFO("id"), json_build_system_id());
+    send_resp(MQTT_TOPIC_INFO("last_reset"), json_build_last_reset());
+}
+
+// `topic_suffix` must be null terminated, but `topic` need not be, and `len` is the length of the latter.
+static bool matches_local_topic(const char *topic_suffix, const char *topic, size_t len) {
+    if (len < device_topic_root_len || memcmp(device_topic_root, topic, device_topic_root_len)) {
+        return false;
+    }
+
+    topic += device_topic_root_len;
+    len -= device_topic_root_len;
+
+    if (!len || *topic != '/') {
+        return false;
+    }
+
+    topic++;
+    len--;
+
+    while (*topic_suffix) {
+        if (!len || *topic_suffix != *topic) {
+            return false;
+        }
+        topic_suffix++;
+        topic++;
+        len--;
+    }
+
+    if (len) {
+        return false;
+    }
+
+    return true;
 }
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
@@ -122,20 +153,18 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
     bool did_connect = false;
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t) event_data;
-    esp_mqtt_client_handle_t client = event->client;
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED: {
             // TODO Could this technically fail to arrive? Do something
             // fancy here to periodically check?
-            assert(esp_mqtt_client_subscribe(client, IOT_MQTT_COMMAND_TOPIC("ping"), 0) >= 0);
-            assert(esp_mqtt_client_subscribe(client, topic_subscribe_wildcard_buff, 0) >= 0);
+            libiot_mqtt_subscribe(IOT_MQTT_COMMAND_TOPIC("ping"), 0);
+            libiot_mqtt_subscribe_local("#", 0);
 
             // Send the up status message and WiFi RSSI info
-            send_ping_resp();
+            mqtt_send_ping_resp();
 
             // Publish device hardware information and the last reset reason
-            assert(esp_mqtt_client_publish(client, topic_id_buff, msg_id, 0, 2, 1) >= 0);
-            assert(esp_mqtt_client_publish(client, topic_last_reset_buff, msg_last_reset, 0, 2, 1) >= 0);
+            mqtt_send_refresh_resp();
 
             did_connect = true;
 
@@ -157,15 +186,34 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             break;
         }
         case MQTT_EVENT_DATA: {
-            if (!strncmp(topic_restart_buff, event->topic, event->topic_len)) {
+            if (matches_local_topic(MQTT_TOPIC_CMD("restart"), event->topic, event->topic_len)) {
                 // Any message to this topic will trigger a restart of the ESP32.
-                ESP_LOGE(TAG, "mqtt: restart");
+                ESP_LOGW(TAG, "mqtt: restart");
                 esp_restart();
-            } else if (!strncmp(IOT_MQTT_COMMAND_TOPIC("ping"), event->topic, event->topic_len)) {
-                ESP_LOGI(TAG, "mqtt: ping");
-                // Re-publish up status whenever pinged
-                send_ping_resp();
             }
+
+#ifndef LIBIOT_DISABLE_OTA
+            if (matches_local_topic(MQTT_TOPIC_CMD("ota"), event->topic, event->topic_len)) {
+                // Message to begin OTA
+                ESP_LOGW(TAG, "mqtt: ota");
+
+                char *dup = strndup(event->data, event->data_len);
+                ota_dispatch_request(dup);
+            }
+#endif
+
+            if (!strncmp(IOT_MQTT_COMMAND_TOPIC("ping"), event->topic, event->topic_len)) {
+                // Re-publish up status whenever pinged
+                ESP_LOGI(TAG, "mqtt: ping");
+                mqtt_send_ping_resp();
+            }
+
+            if (matches_local_topic(MQTT_TOPIC_CMD("refresh"), event->topic, event->topic_len)) {
+                // Re-publish up hardware information whenever refreshed
+                ESP_LOGI(TAG, "mqtt: refresh");
+                mqtt_send_refresh_resp();
+            }
+
             break;
         }
         default: {
@@ -192,17 +240,11 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
                int mqtt_task_stack_size, void (*cb)(esp_mqtt_event_handle_t event)) {
     mqtt_event_handler_cb = cb;
 
-    snprintf(topic_subscribe_wildcard_buff, sizeof(topic_subscribe_wildcard_buff), TOPIC_SUBSCRIBE_WILDCARD_FMT, name);
-    snprintf(topic_status_buff, sizeof(topic_status_buff), TOPIC_STATUS_FMT, name);
-    snprintf(topic_id_buff, sizeof(topic_id_buff), TOPIC_id_FMT, name);
-    snprintf(topic_last_reset_buff, sizeof(topic_last_reset_buff), TOPIC_LAST_RESET_FMT, name);
-    snprintf(topic_restart_buff, sizeof(topic_restart_buff), TOPIC_RESTART_FMT, name);
+    device_topic_root_len = snprintf(device_topic_root, sizeof(device_topic_root), IOT_MQTT_DEVICE_TOPIC_ROOT("%s"), name);
+    assert(device_topic_root_len + 1 <= sizeof(device_topic_root));
 
-    msg_id = json_build_system_id();
-    msg_last_reset = json_build_last_reset();
-
-    assert(msg_id);
-    assert(msg_last_reset);
+    char *lwt_topic;
+    assert(asprintf(&lwt_topic, "%s/" MQTT_TOPIC_INFO("status"), device_topic_root) >= 0);
 
     esp_mqtt_client_config_t mqtt_cfg = {
         .uri = uri,
@@ -220,7 +262,7 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
         .task_stack = mqtt_task_stack_size,
 
         // "Last Will and Testament" status (down) message
-        .lwt_topic = topic_status_buff,
+        .lwt_topic = lwt_topic,
         .lwt_msg = json_build_state_down(),
         .lwt_qos = 2,
         .lwt_retain = 1,
@@ -236,6 +278,49 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
         ;
 }
 
-esp_mqtt_client_handle_t mqtt_get_client() {
-    return client;
+static void build_full_topic_suffix(char *buff, size_t buff_len, const char *topic_suffix) {
+    int len = snprintf(buff, buff_len, "%s/%s", device_topic_root, topic_suffix);
+    assert(len + 1 <= buff_len);
+}
+
+#define TOPIC_BUFF_SIZE 64
+
+void libiot_mqtt_subscribe(const char *topic, int qos) {
+    assert(esp_mqtt_client_subscribe(client, topic, qos) >= 0);
+}
+
+void libiot_mqtt_subscribe_local(const char *topic_suffix, int qos) {
+    char topic_buff[TOPIC_BUFF_SIZE];
+    build_full_topic_suffix(topic_buff, sizeof(topic_buff), topic_suffix);
+    libiot_mqtt_subscribe(topic_buff, qos);
+}
+
+void libiot_mqtt_publish(const char *topic, int qos, int retain, const char *msg) {
+    assert(esp_mqtt_client_publish(client, topic, msg, 0, qos, retain) >= 0);
+}
+
+void libiot_mqtt_publish_local(const char *topic_suffix, int qos, int retain, const char *msg) {
+    char topic_buff[TOPIC_BUFF_SIZE];
+    build_full_topic_suffix(topic_buff, sizeof(topic_buff), topic_suffix);
+    libiot_mqtt_publish(topic_buff, qos, retain, msg);
+}
+
+void libiot_mqtt_publishv_local(const char *topic_suffix, int qos, int retain, const char *fmt, va_list va) {
+    char *msg;
+    if (vasprintf(&msg, fmt, va) < 0) {
+        return;
+    }
+
+    libiot_mqtt_publish_local(topic_suffix, qos, retain, msg);
+
+    free(msg);
+}
+
+void libiot_mqtt_publishf_local(const char *topic_suffix, int qos, int retain, const char *fmt, ...) {
+    va_list va;
+    va_start(va, fmt);
+
+    libiot_mqtt_publishv_local(topic_suffix, qos, retain, fmt, va);
+
+    va_end(va);
 }

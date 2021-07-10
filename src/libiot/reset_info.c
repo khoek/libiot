@@ -12,7 +12,7 @@ static reset_info_t generate_reset_info() {
 
         // Software reset via esp_restart
         case ESP_RST_SW: {
-            return (reset_info_t){.raw = raw, .reason = "Software commanded restart", .exceptional = true};
+            return (reset_info_t){.raw = raw, .reason = "Software commanded restart", .exceptional = false};
         }
 
         // Software reset due to exception/panic

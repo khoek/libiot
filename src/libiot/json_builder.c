@@ -3,6 +3,7 @@
 #include <cJSON.h>
 #include <esp_log.h>
 #include <esp_ota_ops.h>
+#include <esp_partition.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
 
@@ -11,6 +12,25 @@
 char *json_build_state_up() {
     wifi_ap_record_t ap;
     esp_wifi_sta_get_ap_info(&ap);
+
+    wifi_ps_type_t ps_type;
+    esp_wifi_get_ps(&ps_type);
+
+    const char *ps_type_str = "?";
+    switch (ps_type) {
+        case WIFI_PS_NONE: {
+            ps_type_str = "none";
+            break;
+        }
+        case WIFI_PS_MIN_MODEM: {
+            ps_type_str = "min_modem";
+            break;
+        }
+        case WIFI_PS_MAX_MODEM: {
+            ps_type_str = "max_modem";
+            break;
+        }
+    }
 
     cJSON *json_root = cJSON_CreateObject();
     if (!json_root) {
@@ -23,11 +43,23 @@ char *json_build_state_up() {
     }
     cJSON_AddItemToObject(json_root, "state", json_state);
 
+    cJSON *json_wifi = cJSON_CreateObject();
+    if (!json_wifi) {
+        goto build_state_up_fail;
+    }
+    cJSON_AddItemToObject(json_root, "wifi", json_wifi);
+
     cJSON *json_wifi_rssi = cJSON_CreateNumber(ap.rssi);
     if (!json_wifi_rssi) {
         goto build_state_up_fail;
     }
-    cJSON_AddItemToObject(json_root, "wifi_rssi", json_wifi_rssi);
+    cJSON_AddItemToObject(json_wifi, "rssi", json_wifi_rssi);
+
+    cJSON *json_ps_type = cJSON_CreateStringReference(ps_type_str);
+    if (!json_ps_type) {
+        goto build_state_up_fail;
+    }
+    cJSON_AddItemToObject(json_wifi, "ps_type", json_ps_type);
 
     char *msg = cJSON_PrintUnformatted(json_root);
     cJSON_Delete(json_root);
@@ -66,6 +98,257 @@ build_state_down_fail:
     // It is safe to call this with `json_root == NULL`.
     cJSON_Delete(json_root);
     return NULL;
+}
+
+const char *lookup_ota_state(esp_ota_img_states_t state) {
+    // Note that "not_present" is also possible at the call site of
+    // this function, if the OTA library reports no data recorded.
+    switch (state) {
+        case ESP_OTA_IMG_NEW: {
+            return "new";
+        }
+        case ESP_OTA_IMG_PENDING_VERIFY: {
+            return "pending_verify";
+        }
+        case ESP_OTA_IMG_VALID: {
+            return "valid";
+        }
+        case ESP_OTA_IMG_INVALID: {
+            return "invalid";
+        }
+        case ESP_OTA_IMG_ABORTED: {
+            return "aborted";
+        }
+        case ESP_OTA_IMG_UNDEFINED: {
+            return "undefined";
+        }
+        default: {
+            return "?";
+        }
+    }
+}
+
+cJSON *build_part_type(esp_partition_type_t type, esp_partition_subtype_t subtype) {
+    cJSON *json_type = cJSON_CreateObject();
+    if (!json_type) {
+        goto build_part_type_fail;
+    }
+
+    cJSON *json_subtype = cJSON_CreateObject();
+    if (!json_subtype) {
+        goto build_part_type_fail;
+    }
+    cJSON_AddItemToObject(json_type, "subtype", json_subtype);
+
+    const char *type_name_str = "?";
+    const char *subtype_name_str = "?";
+
+    switch (type) {
+        case ESP_PARTITION_TYPE_APP: {
+            type_name_str = "app";
+
+            switch (subtype) {
+                case ESP_PARTITION_SUBTYPE_APP_FACTORY: {
+                    subtype_name_str = "factory";
+                    break;
+                }
+                case ESP_PARTITION_SUBTYPE_APP_TEST: {
+                    subtype_name_str = "test";
+                    break;
+                }
+                case ESP_PARTITION_SUBTYPE_APP_OTA_0:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_1:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_2:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_3:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_4:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_5:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_6:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_7:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_8:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_9:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_10:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_11:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_12:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_13:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_14:
+                case ESP_PARTITION_SUBTYPE_APP_OTA_15: {
+                    subtype_name_str = "ota";
+
+                    cJSON *json_ota_num = cJSON_CreateNumber(subtype - ESP_PARTITION_SUBTYPE_APP_OTA_MIN);
+                    if (!json_ota_num) {
+                        goto build_part_type_fail;
+                    }
+                    cJSON_AddItemToObject(json_subtype, "id", json_ota_num);
+
+                    break;
+                }
+                default: {
+                    break;
+                }
+            }
+
+            break;
+        }
+        case ESP_PARTITION_TYPE_DATA: {
+            type_name_str = "data";
+
+            switch (subtype) {
+                case ESP_PARTITION_SUBTYPE_DATA_OTA: {
+                    subtype_name_str = "ota";
+                    break;
+                }
+                case ESP_PARTITION_SUBTYPE_DATA_PHY: {
+                    subtype_name_str = "phy";
+                    break;
+                }
+                case ESP_PARTITION_SUBTYPE_DATA_NVS: {
+                    subtype_name_str = "nvs";
+                    break;
+                }
+                case ESP_PARTITION_SUBTYPE_DATA_COREDUMP: {
+                    subtype_name_str = "core_dump";
+                    break;
+                }
+                case ESP_PARTITION_SUBTYPE_DATA_NVS_KEYS: {
+                    subtype_name_str = "nvs_keys";
+                    break;
+                }
+                case ESP_PARTITION_SUBTYPE_DATA_EFUSE_EM: {
+                    subtype_name_str = "efuse_em";
+                    break;
+                }
+                case ESP_PARTITION_SUBTYPE_DATA_ESPHTTPD: {
+                    subtype_name_str = "esphttpd";
+                    break;
+                }
+                case ESP_PARTITION_SUBTYPE_DATA_FAT: {
+                    subtype_name_str = "fat";
+                    break;
+                }
+                case ESP_PARTITION_SUBTYPE_DATA_SPIFFS: {
+                    subtype_name_str = "spiffs";
+                    break;
+                }
+                default: {
+                    break;
+                }
+            }
+
+            break;
+        }
+        default: {
+            break;
+        }
+    }
+
+    cJSON *json_type_name = cJSON_CreateStringReference(type_name_str);
+    if (!json_type_name) {
+        goto build_part_type_fail;
+    }
+    cJSON_AddItemToObject(json_type, "name", json_type_name);
+
+    cJSON *json_subtype_name = cJSON_CreateStringReference(subtype_name_str);
+    if (!json_subtype_name) {
+        goto build_part_type_fail;
+    }
+    cJSON_AddItemToObject(json_subtype, "name", json_subtype_name);
+
+    return json_type;
+
+build_part_type_fail:
+    cJSON_Delete(json_type);
+    return NULL;
+}
+
+static bool add_partitions_to_array(cJSON *json_partitions_list, esp_partition_iterator_t it) {
+    while (it) {
+        const esp_partition_t *part = esp_partition_get(it);
+
+        cJSON *json_part = cJSON_CreateObject();
+        if (!json_part) {
+            goto add_partitions_to_array_fail;
+        }
+        cJSON_AddItemToArray(json_partitions_list, json_part);
+
+        cJSON *json_flash_chip_id = cJSON_CreateNumber(part->flash_chip->chip_id);
+        if (!json_flash_chip_id) {
+            goto add_partitions_to_array_fail;
+        }
+        cJSON_AddItemToObject(json_part, "flash_chip_id", json_flash_chip_id);
+
+        cJSON *json_type = build_part_type(part->type, part->subtype);
+        if (!json_type) {
+            goto add_partitions_to_array_fail;
+        }
+        cJSON_AddItemToObject(json_part, "type", json_type);
+
+        cJSON *json_address = cJSON_CreateNumber(part->address);
+        if (!json_address) {
+            goto add_partitions_to_array_fail;
+        }
+        cJSON_AddItemToObject(json_part, "address", json_address);
+
+        cJSON *json_size = cJSON_CreateNumber(part->size);
+        if (!json_size) {
+            goto add_partitions_to_array_fail;
+        }
+        cJSON_AddItemToObject(json_part, "size", json_size);
+
+        cJSON *json_label = cJSON_CreateStringReference(part->label);
+        if (!json_label) {
+            goto add_partitions_to_array_fail;
+        }
+        cJSON_AddItemToObject(json_part, "label", json_label);
+
+        cJSON *json_encrypted = cJSON_CreateBool(part->encrypted);
+        if (!json_encrypted) {
+            goto add_partitions_to_array_fail;
+        }
+        cJSON_AddItemToObject(json_part, "encrypted", json_encrypted);
+
+        cJSON *json_ota_state;
+        esp_ota_img_states_t ota_state;
+        if (esp_ota_get_state_partition(part, &ota_state) == ESP_OK) {
+            json_ota_state = cJSON_CreateStringReference(lookup_ota_state(ota_state));
+        } else {
+            json_ota_state = cJSON_CreateStringReference("not_present");
+        }
+        if (!json_ota_state) {
+            goto add_partitions_to_array_fail;
+        }
+        cJSON_AddItemToObject(json_part, "ota_state", json_ota_state);
+
+        it = esp_partition_next(it);
+    }
+
+    if (it) {
+        esp_partition_iterator_release(it);
+    }
+    return true;
+
+add_partitions_to_array_fail:
+    if (it) {
+        esp_partition_iterator_release(it);
+    }
+    return false;
+}
+
+static bool add_partition_address_to_object(cJSON *json_partitions, const char *name, const esp_partition_t *part) {
+    cJSON *json;
+    if (part) {
+        json = cJSON_CreateNumber(part->address);
+    } else {
+        json = cJSON_CreateNull();
+    }
+    if (!json) {
+        goto add_partition_address_to_object_fail;
+    }
+    cJSON_AddItemToObject(json_partitions, name, json);
+
+    return true;
+
+add_partition_address_to_object_fail:
+    return false;
 }
 
 char *json_build_system_id() {
@@ -159,35 +442,80 @@ char *json_build_system_id() {
         cJSON_AddItemToArray(json_app_desc_app_elf_sha256, json_num);
     }
 
-    cJSON *json_idf = cJSON_CreateObject();
-    if (!json_idf) {
+    cJSON *json_partitions = cJSON_CreateObject();
+    if (!json_partitions) {
         goto build_id_fail;
     }
-    cJSON_AddItemToObject(json_software, "idf_version", json_idf);
+    cJSON_AddItemToObject(json_software, "partitions", json_partitions);
+
+    cJSON *json_partitions_list = cJSON_CreateArray();
+    if (!json_partitions_list) {
+        goto build_id_fail;
+    }
+    cJSON_AddItemToObject(json_partitions, "list", json_partitions_list);
+
+    // TODO In the version of esp-idf after v4.3 the flag `ESP_PARTITION_TYPE_ANY`
+    // will be introduced, simplifying this.
+
+    if (!add_partitions_to_array(json_partitions_list, esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, NULL))) {
+        goto build_id_fail;
+    }
+
+    if (!add_partitions_to_array(json_partitions_list, esp_partition_find(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, NULL))) {
+        goto build_id_fail;
+    }
+
+    if (!add_partition_address_to_object(json_partitions, "boot", esp_ota_get_boot_partition())) {
+        goto build_id_fail;
+    }
+
+    if (!add_partition_address_to_object(json_partitions, "running", esp_ota_get_running_partition())) {
+        goto build_id_fail;
+    }
+
+    if (!add_partition_address_to_object(json_partitions, "last_invalid", esp_ota_get_last_invalid_partition())) {
+        goto build_id_fail;
+    }
+
+    if (!add_partition_address_to_object(json_partitions, "next_update", esp_ota_get_next_update_partition(NULL))) {
+        goto build_id_fail;
+    }
+
+    cJSON *json_partitions_is_rollback_possible = cJSON_CreateBool(esp_ota_check_rollback_is_possible());
+    if (!json_partitions_is_rollback_possible) {
+        goto build_id_fail;
+    }
+    cJSON_AddItemToObject(json_partitions, "is_rollback_possible", json_partitions_is_rollback_possible);
+
+    cJSON *json_idf_version = cJSON_CreateObject();
+    if (!json_idf_version) {
+        goto build_id_fail;
+    }
+    cJSON_AddItemToObject(json_software, "idf_version", json_idf_version);
 
     cJSON *json_idf_major = cJSON_CreateNumber((double) ESP_IDF_VERSION_MAJOR);
     if (!json_idf_major) {
         goto build_id_fail;
     }
-    cJSON_AddItemToObject(json_idf, "major", json_idf_major);
+    cJSON_AddItemToObject(json_idf_version, "major", json_idf_major);
 
     cJSON *json_idf_minor = cJSON_CreateNumber((double) ESP_IDF_VERSION_MINOR);
     if (!json_idf_minor) {
         goto build_id_fail;
     }
-    cJSON_AddItemToObject(json_idf, "minor", json_idf_minor);
+    cJSON_AddItemToObject(json_idf_version, "minor", json_idf_minor);
 
     cJSON *json_idf_patch = cJSON_CreateNumber((double) ESP_IDF_VERSION_PATCH);
     if (!json_idf_patch) {
         goto build_id_fail;
     }
-    cJSON_AddItemToObject(json_idf, "patch", json_idf_patch);
+    cJSON_AddItemToObject(json_idf_version, "patch", json_idf_patch);
 
     cJSON *json_idf_blob = cJSON_CreateStringReference(IDF_VER);
     if (!json_idf_blob) {
         goto build_id_fail;
     }
-    cJSON_AddItemToObject(json_idf, "blob", json_idf_blob);
+    cJSON_AddItemToObject(json_idf_version, "blob", json_idf_blob);
 
     cJSON *json_efuse = cJSON_CreateObject();
     if (!json_efuse) {
