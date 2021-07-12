@@ -17,5 +17,6 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
 
 void mqtt_send_ping_resp();
 void mqtt_send_refresh_resp();
+void mqtt_send_mem_check_resp();
 
 #endif

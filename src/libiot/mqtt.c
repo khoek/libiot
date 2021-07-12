@@ -21,22 +21,26 @@ static SemaphoreHandle_t startup_sem;
 
 static esp_mqtt_client_handle_t client = NULL;
 
-static void send_resp(const char *suffix, char *msg) {
+static void send_resp(const char *suffix, char *msg, bool retain) {
     assert(msg);
-    libiot_mqtt_publish_local(suffix, 2, 1, msg);
+    libiot_mqtt_publish_local(suffix, 2, retain ? 1 : 0, msg);
     free(msg);
 }
 
 void mqtt_send_ping_resp() {
-    send_resp(MQTT_TOPIC_INFO("status"), json_build_state_up());
+    send_resp(MQTT_TOPIC_INFO("status"), json_build_state_up(), true);
 }
 
 void mqtt_send_refresh_resp() {
-    send_resp(MQTT_TOPIC_INFO("id"), json_build_system_id());
-    send_resp(MQTT_TOPIC_INFO("last_reset"), json_build_last_reset());
+    send_resp(MQTT_TOPIC_INFO("id"), json_build_system_id(), true);
+    send_resp(MQTT_TOPIC_INFO("last_reset"), json_build_last_reset(), true);
 }
 
-// `topic_suffix` must be null terminated, but `topic` need not be, and `len` is the length of the latter.
+void mqtt_send_mem_check_resp() {
+    send_resp(MQTT_TOPIC_INFO("mem_check"), json_build_mem_check(), false);
+}
+
+// Note: `topic_suffix` must be null terminated, but `topic` need not be, and `len` is the length of the latter.
 static bool matches_local_topic(const char *topic_suffix, const char *topic, size_t len) {
     if (len < device_topic_root_len || memcmp(device_topic_root, topic, device_topic_root_len)) {
         return false;
@@ -134,6 +138,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                 mqtt_send_refresh_resp();
             }
 
+            if (matches_local_topic(MQTT_TOPIC_CMD("mem_check"), event->topic, event->topic_len)) {
+                // Perform a memory integrity check, and also report the current heap state.
+                ESP_LOGI(TAG, "mqtt: mem_check");
+                mqtt_send_mem_check_resp();
+            }
+
             break;
         }
         default: {
@@ -165,6 +175,7 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
 
     char *lwt_topic;
     assert(asprintf(&lwt_topic, "%s/" MQTT_TOPIC_INFO("status"), device_topic_root) >= 0);
+    char *lwt_msg = json_build_state_down();
 
     esp_mqtt_client_config_t mqtt_cfg = {
         .uri = uri,
@@ -175,15 +186,15 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
         .password = pass,
 
         // Keepalive interval in seconds (this is the time between ping messages exchanged with the
-        // broker, i.e. how long it will take for other devices to observe that we are down.)
-        .keepalive = 5,
+        // broker, i.e. roughly how long it will take for other devices to observe that we are down.)
+        .keepalive = 1,
 
         // If `task_stack` is not positive then `CONFIG_MQTT_TASK_STACK_SIZE` is used by esp-mqtt.
         .task_stack = mqtt_task_stack_size,
 
         // "Last Will and Testament" status (down) message
         .lwt_topic = lwt_topic,
-        .lwt_msg = json_build_state_down(),
+        .lwt_msg = lwt_msg,
         .lwt_qos = 2,
         .lwt_retain = 1,
     };
@@ -191,6 +202,10 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
     startup_sem = xSemaphoreCreateBinaryStatic(&startup_sem_buffer);
 
     client = esp_mqtt_client_init(&mqtt_cfg);
+
+    free(lwt_topic);
+    free(lwt_msg);
+
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, client);
     esp_mqtt_client_start(client);
 

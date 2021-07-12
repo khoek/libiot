@@ -100,6 +100,144 @@ build_state_down_fail:
     return NULL;
 }
 
+typedef struct heap_cap_desc {
+    const char *name;
+    uint32_t code;
+} heap_cap_desc_t;
+
+// Note that "any" includes all heaps, and that the other capabilities
+// are not mutually exclusive either.
+const heap_cap_desc_t HEAP_CAPS[] = {
+    {.name = "any", .code = 0},
+    {.name = "exec", .code = MALLOC_CAP_EXEC},
+    {.name = "8bit", .code = MALLOC_CAP_8BIT},
+    /*
+    NOTE: The following are unused in the current version of ESP-IDF.
+    {.name = "pid2", .code = MALLOC_CAP_PID2},
+    {.name = "pid3", .code = MALLOC_CAP_PID3},
+    {.name = "pid4", .code = MALLOC_CAP_PID4},
+    {.name = "pid5", .code = MALLOC_CAP_PID5},
+    {.name = "pid6", .code = MALLOC_CAP_PID6},
+    {.name = "pid7", .code = MALLOC_CAP_PID7},
+    */
+    {.name = "spi_ram", .code = MALLOC_CAP_SPIRAM},
+    {.name = "internal", .code = MALLOC_CAP_INTERNAL},
+    {.name = "default", .code = MALLOC_CAP_DEFAULT},
+    {.name = "iram_8bit", .code = MALLOC_CAP_IRAM_8BIT},
+    {.name = "retention", .code = MALLOC_CAP_RETENTION},
+    /*
+    NOTE: Not a real heap capability.
+    {.name = "invalid", .code = MALLOC_CAP_INVALID}
+    */
+};
+
+char *json_build_mem_check() {
+    bool heap_integrity_sound = heap_caps_check_integrity_all(true);
+    if (heap_integrity_sound) {
+        ESP_LOGI(TAG, "heap integrity sound");
+    } else {
+        ESP_LOGE(TAG, "heap integrity unsound!");
+    }
+
+    // Obtain all of the allocation information first, so that the JSON structures
+    // we are about to allocate do not affect the reported results.
+    //
+    // Note that there is no locking here, so the reported allocation information
+    // for the capabilities may not be altogether consistent because of allocations
+    // occuring on another task or core.
+    multi_heap_info_t heap_info[sizeof(HEAP_CAPS) / sizeof(heap_cap_desc_t)];
+    for (size_t i = 0; i < sizeof(HEAP_CAPS) / sizeof(heap_cap_desc_t); i++) {
+        heap_caps_get_info(&heap_info[i], HEAP_CAPS[i].code);
+    }
+
+    cJSON *json_root = cJSON_CreateObject();
+    if (!json_root) {
+        goto build_state_down_fail;
+    }
+
+    cJSON *json_heap_integrity_sound = cJSON_CreateBool(heap_integrity_sound);
+    if (!json_heap_integrity_sound) {
+        goto build_state_down_fail;
+    }
+    cJSON_AddItemToObject(json_root, "heap_integrity_sound", json_heap_integrity_sound);
+
+    cJSON *json_heap_capabilities = cJSON_CreateArray();
+    if (!json_heap_capabilities) {
+        goto build_state_down_fail;
+    }
+    cJSON_AddItemToObject(json_root, "heap_capabilities", json_heap_capabilities);
+
+    for (size_t i = 0; i < sizeof(HEAP_CAPS) / sizeof(heap_cap_desc_t); i++) {
+        multi_heap_info_t info;
+        heap_caps_get_info(&info, HEAP_CAPS[i].code);
+
+        cJSON *json_cap = cJSON_CreateObject();
+        if (!json_cap) {
+            goto build_state_down_fail;
+        }
+        cJSON_AddItemToArray(json_heap_capabilities, json_cap);
+
+        cJSON *json_name = cJSON_CreateStringReference(HEAP_CAPS[i].name);
+        if (!json_name) {
+            goto build_state_down_fail;
+        }
+        cJSON_AddItemToObject(json_cap, "name", json_name);
+
+        cJSON *json_total_free_bytes = cJSON_CreateNumber(info.total_free_bytes);
+        if (!json_total_free_bytes) {
+            goto build_state_down_fail;
+        }
+        cJSON_AddItemToObject(json_cap, "total_free_bytes", json_total_free_bytes);
+
+        cJSON *json_total_allocated_bytes = cJSON_CreateNumber(info.total_allocated_bytes);
+        if (!json_total_allocated_bytes) {
+            goto build_state_down_fail;
+        }
+        cJSON_AddItemToObject(json_cap, "total_allocated_bytes", json_total_allocated_bytes);
+
+        cJSON *json_largest_free_block = cJSON_CreateNumber(info.largest_free_block);
+        if (!json_largest_free_block) {
+            goto build_state_down_fail;
+        }
+        cJSON_AddItemToObject(json_cap, "largest_free_block", json_largest_free_block);
+
+        cJSON *json_minimum_free_bytes = cJSON_CreateNumber(info.minimum_free_bytes);
+        if (!json_minimum_free_bytes) {
+            goto build_state_down_fail;
+        }
+        cJSON_AddItemToObject(json_cap, "minimum_free_bytes", json_minimum_free_bytes);
+
+        cJSON *json_allocated_blocks = cJSON_CreateNumber(info.allocated_blocks);
+        if (!json_allocated_blocks) {
+            goto build_state_down_fail;
+        }
+        cJSON_AddItemToObject(json_cap, "allocated_blocks", json_allocated_blocks);
+
+        cJSON *json_free_blocks = cJSON_CreateNumber(info.free_blocks);
+        if (!json_free_blocks) {
+            goto build_state_down_fail;
+        }
+        cJSON_AddItemToObject(json_cap, "free_blocks", json_free_blocks);
+
+        cJSON *json_total_blocks = cJSON_CreateNumber(info.total_blocks);
+        if (!json_total_blocks) {
+            goto build_state_down_fail;
+        }
+        cJSON_AddItemToObject(json_cap, "total_blocks", json_total_blocks);
+    }
+
+    char *msg = cJSON_PrintUnformatted(json_root);
+    cJSON_Delete(json_root);
+    return msg;
+
+build_state_down_fail:
+    ESP_LOGE(TAG, "%s: JSON fail", __func__);
+
+    // It is safe to call this with `json_root == NULL`.
+    cJSON_Delete(json_root);
+    return NULL;
+}
+
 const char *lookup_ota_state(esp_ota_img_states_t state) {
     // Note that "not_present" is also possible at the call site of
     // this function, if the OTA library reports no data recorded.
