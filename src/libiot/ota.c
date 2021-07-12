@@ -14,13 +14,13 @@
 #define TASK_STACK_DEPTH 8192
 #define QUEUE_LENGTH 16
 
-static StaticQueue_t manifest_queue_static;
-static uint8_t manifest_queue_buff[QUEUE_LENGTH * sizeof(char *)];
-static QueueHandle_t manifest_queue;
+static StaticQueue_t ota_cmd_queue_static;
+static uint8_t ota_cmd_queue_buff[QUEUE_LENGTH * sizeof(char *)];
+static QueueHandle_t ota_cmd_queue;
 
 #define MILESTONE_BYTES 100000
 
-static bool perform_ota(const char *url, const char *ca_cert_pem) {
+static bool perform_update(const char *url, const char *ca_cert_pem) {
     ESP_LOGI(TAG, "ota: start (%s)", url);
     libiot_mqtt_publishf_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"start\"}");
 
@@ -103,32 +103,68 @@ ota_end_skip_abort:
     return false;
 }
 
-static void process_manifest(const char *manifest_json) {
-    ESP_LOGI(TAG, "ota: reading manifest (%d bytes)", strlen(manifest_json));
+static const char *process_cmd_update(const cJSON *json_root) {
+    const cJSON *json_url = cJSON_GetObjectItemCaseSensitive(json_root, "url");
+    if (!json_url || !cJSON_IsString(json_url)) {
+        return "update: no `url` or not a string!";
+    }
+
+    const cJSON *json_ca_cert = cJSON_GetObjectItemCaseSensitive(json_root, "ca_cert");
+    if (!json_ca_cert || !cJSON_IsString(json_ca_cert)) {
+        return "update: no `ca_cert` or not a string!";
+    }
+
+    perform_update(json_url->valuestring, json_ca_cert->valuestring);
+
+    return NULL;
+}
+
+static const char *process_cmd_validate(const cJSON *json_root) {
+    esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    if (err != ESP_OK) {
+        libiot_logf_error(TAG, "ota: validate failed with error code (0x%X)", err);
+    }
+
+    return NULL;
+}
+
+static const char *process_cmd_rollback(const cJSON *json_root) {
+    esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
+    if (err != ESP_OK) {
+        libiot_logf_error(TAG, "ota: rollback failed with error code (0x%X)", err);
+    }
+
+    return NULL;
+}
+
+static void process_cmd(const char *manifest_json) {
+    ESP_LOGI(TAG, "ota: reading cmd (%d bytes)", strlen(manifest_json));
 
     const char *fail_msg = NULL;
 
     cJSON *json_root = cJSON_Parse(manifest_json);
     if (!json_root) {
         fail_msg = "JSON parse error";
-        goto process_manifest_out;
+        goto process_cmd_out;
     }
 
-    const cJSON *json_url = cJSON_GetObjectItemCaseSensitive(json_root, "url");
-    if (!json_url || !cJSON_IsString(json_url)) {
-        fail_msg = "no `url` or not a string!";
-        goto process_manifest_out;
+    const cJSON *json_type = cJSON_GetObjectItemCaseSensitive(json_root, "type");
+    if (!json_type || !cJSON_IsString(json_type)) {
+        fail_msg = "no `type` or not a string!";
+        goto process_cmd_out;
     }
 
-    const cJSON *json_ca_cert = cJSON_GetObjectItemCaseSensitive(json_root, "ca_cert");
-    if (!json_ca_cert || !cJSON_IsString(json_ca_cert)) {
-        fail_msg = "no `ca_cert` or not a string!";
-        goto process_manifest_out;
+    if (!strcmp(json_type->valuestring, "update")) {
+        fail_msg = process_cmd_update(json_root);
+    } else if (!strcmp(json_type->valuestring, "validate")) {
+        fail_msg = process_cmd_validate(json_root);
+    } else if (!strcmp(json_type->valuestring, "rollback")) {
+        fail_msg = process_cmd_rollback(json_root);
+    } else {
+        fail_msg = "unknown cmd `type`";
     }
 
-    perform_ota(json_url->valuestring, json_ca_cert->valuestring);
-
-process_manifest_out:
+process_cmd_out:
     if (fail_msg) {
         libiot_logf_error(TAG, "ota: %s", fail_msg);
     }
@@ -139,31 +175,31 @@ process_manifest_out:
 
 static void task_run(void *unused) {
     while (1) {
-        char *manifest;
-        while (xQueueReceive(manifest_queue, &manifest, portMAX_DELAY) == pdFALSE)
+        char *cmd_json;
+        while (xQueueReceive(ota_cmd_queue, &cmd_json, portMAX_DELAY) == pdFALSE)
             ;
 
-        process_manifest(manifest);
-        free(manifest);
+        process_cmd(cmd_json);
+        free(cmd_json);
 
         // Refresh the published partition states
         mqtt_send_refresh_resp();
     }
 }
 
-void ota_dispatch_request(char *manifest_json) {
-    if (!manifest_queue) {
+void ota_dispatch_request(char *cmd_json) {
+    if (!ota_cmd_queue) {
         libiot_logf_error(TAG, "ota: dispatch request with ota not initialized!");
         return;
     }
 
-    if (xQueueSend(manifest_queue, &manifest_json, 0) != pdTRUE) {
+    if (xQueueSend(ota_cmd_queue, &cmd_json, 0) != pdTRUE) {
         libiot_logf_error(TAG, "ota: can't queue manifest");
     }
 }
 
 esp_err_t ota_init() {
-    manifest_queue = xQueueCreateStatic(QUEUE_LENGTH, sizeof(char *), manifest_queue_buff, &manifest_queue_static);
+    ota_cmd_queue = xQueueCreateStatic(QUEUE_LENGTH, sizeof(char *), ota_cmd_queue_buff, &ota_cmd_queue_static);
 
     if (xTaskCreate(task_run, "ota_task", TASK_STACK_DEPTH, NULL, 5, NULL) != pdPASS) {
         return ESP_FAIL;

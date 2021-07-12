@@ -9,10 +9,14 @@
 ////////
 
 // NOTE In practice we require the following in `sdkconfig`:
-// * CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ=240 (Otherwise TLS sockets can time out and be reset.)
-// * CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=8192 (Otherwise our certificate chain might be too large to send during SSL auth.)
-// * CONFIG_MQTT_BUFFER_SIZE=4096 (Otherwise the certificate in OTA packets may be too big to recieve.)
-// * CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y (In order to enable OTA rollback.)
+// * CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ=240
+//      (Otherwise TLS sockets can time out and be reset.)
+// * CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=8192
+//      (Otherwise our certificate chain might be too large to send during SSL auth.)
+// * CONFIG_MQTT_BUFFER_SIZE=4096
+//      (Otherwise the url and certificate in OTA packets may be too big to recieve.)
+// * CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+//      (In order to enable OTA rollback.)
 
 #include <mqtt_client.h>
 
@@ -20,7 +24,7 @@
 #define IOT_MQTT_ROOT_NAMESPACE "hoek/"
 #endif
 
-// e.g. is 'hoek/cmd/<cmd>'.
+// e.g. 'hoek/cmd/<cmd>'.
 #define IOT_MQTT_COMMAND_TOPIC(cmd_literal) \
     IOT_MQTT_ROOT_NAMESPACE "cmd/" cmd_literal
 
