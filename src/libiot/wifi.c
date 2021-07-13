@@ -121,7 +121,7 @@ static void wifi_init_sta(const char *ssid, const char *pass, wifi_ps_type_t ps_
     wifi_config.sta.pmf_cfg.required = false;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_set_ps(ps_type));
     ESP_ERROR_CHECK(esp_wifi_start());
 
