@@ -189,6 +189,9 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
         // broker, i.e. roughly how long it will take for other devices to observe that we are down.)
         .keepalive = 1,
 
+        .disable_auto_reconnect = false,
+        .reconnect_timeout_ms = 0,
+
         // If `task_stack` is not positive then `CONFIG_MQTT_TASK_STACK_SIZE` is used by esp-mqtt.
         .task_stack = mqtt_task_stack_size,
 
