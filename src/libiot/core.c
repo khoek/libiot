@@ -62,9 +62,6 @@ void libiot_run(struct node_config *cfg) {
     ESP_ERROR_CHECK(ota_init());
 #endif
 
-    ESP_LOGI(TAG, "calling app_init()");
-    cfg->app_init();
-
     ESP_LOGI(TAG, "init wifi/mqtt");
     if (cfg->ssid) {
         wifi_init(cfg->ssid, cfg->pass, cfg->name, cfg->ps_type);
@@ -84,6 +81,7 @@ void libiot_run(struct node_config *cfg) {
 
     ESP_LOGI(TAG, "startup finished, calling app_run()");
     app_run();
+    ESP_LOGI(TAG, "app_run() returned, cleaning up");
 }
 
 static void task_run(void *arg) {

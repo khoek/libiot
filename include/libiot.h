@@ -56,9 +56,7 @@ struct node_config {
     bool enable_spiffs;
     int mqtt_task_stack_size;
 
-    // App init - called before wifi/mqtt init.
-    void (*app_init)();
-    // App run - called after wifi/mqtt init.
+    // App entry point - called after wifi and mqtt connected.
     void (*app_run)();
 };
 
