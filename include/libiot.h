@@ -37,7 +37,7 @@
     IOT_MQTT_DEVICE_TOPIC_ROOT(device_name_literal)              \
     "/" name_literal
 
-struct node_config {
+typedef struct node_config {
     const char *name;
 
     // WiFi
@@ -58,9 +58,10 @@ struct node_config {
 
     // App entry point - called after wifi and mqtt connected.
     void (*app_run)();
-};
+} node_config_t;
 
-void libiot_startup(struct node_config *cfg);
+void libiot_startup(const node_config_t *cfg);
+void libiot_startup_nowifi(const node_config_t *cfg);
 
 // Send: * an error to the console
 //       * an mqtt message to 'hoek/iot/<device_name>/_info/error'.

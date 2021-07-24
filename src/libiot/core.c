@@ -48,7 +48,7 @@ static esp_err_t spiffs_init() {
     return ret;
 }
 
-void libiot_run(struct node_config *cfg) {
+static void libiot_run(const node_config_t *cfg) {
     ESP_LOGI(TAG, "startup");
 
     reset_info_init();
@@ -62,6 +62,7 @@ void libiot_run(struct node_config *cfg) {
     ESP_ERROR_CHECK(ota_init());
 #endif
 
+#ifndef LIBIOT_DISABLE_WIFI
     ESP_LOGI(TAG, "init wifi/mqtt");
     if (cfg->ssid) {
         wifi_init(cfg->ssid, cfg->pass, cfg->name, cfg->ps_type);
@@ -75,26 +76,23 @@ void libiot_run(struct node_config *cfg) {
     } else {
         ESP_LOGI(TAG, "wifi disabled");
     }
-
-    void (*app_run)() = cfg->app_run;
-    free(cfg);
+#endif
 
     ESP_LOGI(TAG, "startup finished, calling app_run()");
-    app_run();
+    cfg->app_run();
     ESP_LOGI(TAG, "app_run() returned, cleaning up");
 }
 
 static void task_run(void *arg) {
-    libiot_run((struct node_config *) arg);
+    libiot_run((const node_config_t *) arg);
 
     vTaskDelete(NULL);
 }
 
-void libiot_startup(struct node_config *cfg) {
-    struct node_config *cfg_copy = malloc(sizeof(struct node_config));
-    memcpy(cfg_copy, cfg, sizeof(struct node_config));
+#define STARTUP_TASK_STACK_SIZE 32768
 
-    xTaskCreate(&task_run, "libiot_run", 32768, cfg_copy, 5, NULL);
+void libiot_startup(const node_config_t *cfg) {
+    xTaskCreate(&task_run, "libiot_run", STARTUP_TASK_STACK_SIZE, (void *) cfg, 5, NULL);
 }
 
 void libiot_logf_error(const char *tag, const char *format, ...) {

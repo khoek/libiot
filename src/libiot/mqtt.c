@@ -221,11 +221,15 @@ static void build_full_topic_suffix(char *buff, size_t buff_len, const char *top
     assert(len + 1 <= buff_len);
 }
 
-#define TOPIC_BUFF_SIZE 64
-
 void libiot_mqtt_subscribe(const char *topic, int qos) {
+#ifdef LIBIOT_DISABLE_WIFI
+    ESP_LOGW(TAG, "dropped mqtt subscribe! (wifi disabled)");
+#else
     assert(esp_mqtt_client_subscribe(client, topic, qos) >= 0);
+#endif
 }
+
+#define TOPIC_BUFF_SIZE 128
 
 void libiot_mqtt_subscribe_local(const char *topic_suffix, int qos) {
     char topic_buff[TOPIC_BUFF_SIZE];
@@ -234,7 +238,11 @@ void libiot_mqtt_subscribe_local(const char *topic_suffix, int qos) {
 }
 
 void libiot_mqtt_publish(const char *topic, int qos, int retain, const char *msg) {
+#ifdef LIBIOT_DISABLE_WIFI
+    ESP_LOGW(TAG, "dropped mqtt publish! (wifi disabled)");
+#else
     assert(esp_mqtt_client_publish(client, topic, msg, 0, qos, retain) >= 0);
+#endif
 }
 
 void libiot_mqtt_publish_local(const char *topic_suffix, int qos, int retain, const char *msg) {
