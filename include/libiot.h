@@ -56,7 +56,9 @@ typedef struct node_config {
     bool enable_spiffs;
     int mqtt_task_stack_size;
 
-    // App entry point - called after wifi and mqtt connected.
+    // App init - called before wifi or mqtt has been started. May be NULL.
+    void (*app_init)();
+    // App entry point - called after wifi and mqtt connected. May be NULL.
     void (*app_run)();
 } node_config_t;
 
@@ -75,10 +77,13 @@ void libiot_mqtt_subscribe(const char *topic, int qos);
 void libiot_mqtt_subscribe_local(const char *topic_suffix, int qos);
 
 // Publishes under '<topic>'
-void libiot_mqtt_publish(const char *topic, int qos, int retain, const char *msg);
+void libiot_mqtt_enqueue(const char *topic, int qos, int retain, const char *msg);
 // Publishes under 'hoek/iot/<device_name>/<topic_suffix>'
-void libiot_mqtt_publish_local(const char *topic_suffix, int qos, int retain, const char *msg);
-void libiot_mqtt_publishv_local(const char *topic_suffix, int qos, int retain, const char *fmt, va_list va);
-void libiot_mqtt_publishf_local(const char *topic_suffix, int qos, int retain, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
+void libiot_mqtt_enqueue_local(const char *topic_suffix, int qos, int retain, const char *msg);
+void libiot_mqtt_enqueuev_local(const char *topic_suffix, int qos, int retain, const char *fmt, va_list va);
+void libiot_mqtt_enqueuef_local(const char *topic_suffix, int qos, int retain, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
+
+// Convenience method to obtain 'hoek/iot/<device_name>/<topic_suffix>'
+void libiot_mqtt_build_local_topic_from_suffix(char *buff, size_t buff_len, const char *topic_suffix);
 
 #endif

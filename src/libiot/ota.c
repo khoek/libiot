@@ -22,7 +22,7 @@ static QueueHandle_t ota_cmd_queue;
 
 static bool perform_update(const char *url, const char *ca_cert_pem) {
     ESP_LOGI(TAG, "ota: start (%s)", url);
-    libiot_mqtt_publishf_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"start\"}");
+    libiot_mqtt_enqueuef_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"start\"}");
 
     esp_err_t err;
     const char *fail_msg = NULL;
@@ -64,7 +64,7 @@ static bool perform_update(const char *url, const char *ca_cert_pem) {
         if (milestone_count > last_milestone_count) {
             uint32_t kb_count = byte_count / 1000;
             ESP_LOGI(TAG, "ota: read %d kB", kb_count);
-            libiot_mqtt_publishf_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"in_progress\", \"rx_kb\":%d}", kb_count);
+            libiot_mqtt_enqueuef_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"in_progress\", \"rx_kb\":%d}", kb_count);
             last_milestone_count = milestone_count;
         }
     }
@@ -91,7 +91,7 @@ static bool perform_update(const char *url, const char *ca_cert_pem) {
     }
 
     ESP_LOGI(TAG, "ota: upgrade successful");
-    libiot_mqtt_publishf_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"done\"}");
+    libiot_mqtt_enqueuef_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"done\"}");
     return true;
 
 ota_end:
@@ -99,7 +99,7 @@ ota_end:
 
 ota_end_skip_abort:
     libiot_logf_error(TAG, "ota: %s (0x%X)", fail_msg ? fail_msg : "???", err);
-    libiot_mqtt_publishf_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"fail\"}");
+    libiot_mqtt_enqueuef_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"fail\"}");
     return false;
 }
 

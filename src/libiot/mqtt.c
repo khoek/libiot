@@ -1,6 +1,9 @@
 #include "mqtt.h"
 
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
+#include <libesp.h>
 #include <mqtt_client.h>
 #include <stdio.h>
 
@@ -16,14 +19,27 @@ static char device_topic_root[64];
 static size_t device_topic_root_len;
 
 static void (*mqtt_event_handler_cb)(esp_mqtt_event_handle_t event);
-static StaticSemaphore_t startup_sem_buffer;
-static SemaphoreHandle_t startup_sem;
+static StaticEventGroup_t events_static;
+static EventGroupHandle_t events;
+
+// These are two separate bits in order to be able to wait on either condition.
+// The guarentee is that they will never both be set, but neither could be
+// (during a transition, or before the first connect).
+#define MQTT_EVENT_CONNECTED (1ULL << 0)
+#define MQTT_EVENT_DISCONNECTED (1ULL << 1)
+
+#define WATCHDOG_TASK_STACK_SIZE 2048
+#define WATCHDOG_TASK_PRIORITY 100
+
+#define WATCHDOG_CONNECT_TIMEOUT_INTERVAL_MS (2 * 60 * 1000)
+
+#define FIRST_CONNECT_TIMEOUT_INTERVAL_MS (2 * 60 * 1000)
 
 static esp_mqtt_client_handle_t client = NULL;
 
 static void send_resp(const char *suffix, char *msg, bool retain) {
     assert(msg);
-    libiot_mqtt_publish_local(suffix, 2, retain ? 1 : 0, msg);
+    libiot_mqtt_enqueue_local(suffix, 2, retain ? 1 : 0, msg);
     free(msg);
 }
 
@@ -75,7 +91,6 @@ static bool matches_local_topic(const char *topic_suffix, const char *topic, siz
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     ESP_LOGD(TAG, "mqtt event: base='%s', event_id=%d", base, event_id);
 
-    bool did_connect = false;
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t) event_data;
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED: {
@@ -90,10 +105,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
             // Publish device hardware information and the last reset reason
             mqtt_send_refresh_resp();
 
-            did_connect = true;
-
             gpio_led_set_state(true);
             ESP_LOGI(TAG, "mqtt connected, up status published");
+
+            xEventGroupClearBits(events, MQTT_EVENT_DISCONNECTED);
+            xEventGroupSetBits(events, MQTT_EVENT_CONNECTED);
             break;
         }
         case MQTT_EVENT_DISCONNECTED: {
@@ -107,6 +123,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
             gpio_led_set_state(false);
             ESP_LOGI(TAG, "mqtt disconnected");
+
+            xEventGroupClearBits(events, MQTT_EVENT_CONNECTED);
+            xEventGroupSetBits(events, MQTT_EVENT_DISCONNECTED);
             break;
         }
         case MQTT_EVENT_DATA: {
@@ -155,23 +174,49 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         mqtt_event_handler_cb(event);
     }
 
-    UBaseType_t stack_remaining = uxTaskGetStackHighWaterMark(NULL);
-    if (stack_remaining <= 0) {
-        ESP_LOGE(TAG, "mqtt task stack overflow detected!");
-    }
-    ESP_LOGD(TAG, "mqtt task stack words remaining: %u", stack_remaining);
-
-    if (did_connect) {
-        xSemaphoreGive(&startup_sem_buffer);
-    }
+    ESP_ERROR_CHECK(util_stack_overflow_check());
 }
 
-void mqtt_init(const char *uri, const char *cert, const char *key, const char *name, const char *pass,
-               int mqtt_task_stack_size, void (*cb)(esp_mqtt_event_handle_t event)) {
-    mqtt_event_handler_cb = cb;
+static void task_mqtt_watchdog(void *unused) {
+    EventBits_t bits;
 
-    device_topic_root_len = snprintf(device_topic_root, sizeof(device_topic_root), IOT_MQTT_DEVICE_TOPIC_ROOT("%s"), name);
+    // Wait (arbitrarily long) until connected for the first time.
+    do {
+        bits = xEventGroupWaitBits(events, MQTT_EVENT_CONNECTED, false, false, portMAX_DELAY);
+    } while (!(bits & MQTT_EVENT_CONNECTED));
+
+    while (1) {
+        // Wait (arbitrarily long) until we disconnect.
+        do {
+            bits = xEventGroupWaitBits(events, MQTT_EVENT_DISCONNECTED, false, false, portMAX_DELAY);
+        } while (!(bits & MQTT_EVENT_DISCONNECTED));
+
+        // Wait until we reconnect, or the watchdog timeout is reached.
+        bits = xEventGroupWaitBits(events, MQTT_EVENT_CONNECTED, false, false,
+                                   WATCHDOG_CONNECT_TIMEOUT_INTERVAL_MS / portTICK_PERIOD_MS);
+        if (!(bits & MQTT_EVENT_CONNECTED)) {
+            // Timeout reached, so trigger the watchdog.
+            ESP_LOGE(TAG, "mqtt watchdog timeout, restarting!");
+            esp_restart();
+        }
+
+        // We managed to reconnect, so wait for another disconnect...
+
+        ESP_ERROR_CHECK(util_stack_overflow_check());
+    }
+
+    vTaskDelete(NULL);
+}
+
+void mqtt_init(const char *name) {
+    device_topic_root_len = snprintf(device_topic_root, sizeof(device_topic_root),
+                                     IOT_MQTT_DEVICE_TOPIC_ROOT("%s"), name);
     assert(device_topic_root_len + 1 <= sizeof(device_topic_root));
+}
+
+void mqtt_start(const char *uri, const char *cert, const char *key, const char *name, const char *pass,
+                int mqtt_task_stack_size, void (*cb)(esp_mqtt_event_handle_t event)) {
+    mqtt_event_handler_cb = cb;
 
     char *lwt_topic;
     assert(asprintf(&lwt_topic, "%s/" MQTT_TOPIC_INFO("status"), device_topic_root) >= 0);
@@ -190,7 +235,7 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
         .keepalive = 1,
 
         .disable_auto_reconnect = false,
-        .reconnect_timeout_ms = 0,
+        .reconnect_timeout_ms = 1000,
 
         // If `task_stack` is not positive then `CONFIG_MQTT_TASK_STACK_SIZE` is used by esp-mqtt.
         .task_stack = mqtt_task_stack_size,
@@ -202,7 +247,7 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
         .lwt_retain = 1,
     };
 
-    startup_sem = xSemaphoreCreateBinaryStatic(&startup_sem_buffer);
+    events = xEventGroupCreateStatic(&events_static);
 
     client = esp_mqtt_client_init(&mqtt_cfg);
 
@@ -212,11 +257,18 @@ void mqtt_init(const char *uri, const char *cert, const char *key, const char *n
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, client);
     esp_mqtt_client_start(client);
 
-    while (xSemaphoreTake(startup_sem, portMAX_DELAY) == pdFALSE)
-        ;
+    xTaskCreate(task_mqtt_watchdog, "mqtt_watchdog", WATCHDOG_TASK_STACK_SIZE, NULL, WATCHDOG_TASK_PRIORITY, NULL);
+
+    EventBits_t bits = xEventGroupWaitBits(events, MQTT_EVENT_CONNECTED, false, false,
+                                           FIRST_CONNECT_TIMEOUT_INTERVAL_MS / portTICK_PERIOD_MS);
+    if (!(bits & MQTT_EVENT_CONNECTED)) {
+        // Connect timeout, restart the ESP32!
+        ESP_LOGE(TAG, "mqtt first connect timeout, restarting!");
+        esp_restart();
+    }
 }
 
-static void build_full_topic_suffix(char *buff, size_t buff_len, const char *topic_suffix) {
+void libiot_mqtt_build_local_topic_from_suffix(char *buff, size_t buff_len, const char *topic_suffix) {
     int len = snprintf(buff, buff_len, "%s/%s", device_topic_root, topic_suffix);
     assert(len + 1 <= buff_len);
 }
@@ -233,40 +285,40 @@ void libiot_mqtt_subscribe(const char *topic, int qos) {
 
 void libiot_mqtt_subscribe_local(const char *topic_suffix, int qos) {
     char topic_buff[TOPIC_BUFF_SIZE];
-    build_full_topic_suffix(topic_buff, sizeof(topic_buff), topic_suffix);
+    libiot_mqtt_build_local_topic_from_suffix(topic_buff, sizeof(topic_buff), topic_suffix);
     libiot_mqtt_subscribe(topic_buff, qos);
 }
 
-void libiot_mqtt_publish(const char *topic, int qos, int retain, const char *msg) {
+void libiot_mqtt_enqueue(const char *topic, int qos, int retain, const char *msg) {
 #ifdef LIBIOT_DISABLE_WIFI
-    ESP_LOGW(TAG, "dropped mqtt publish! (wifi disabled)");
+    ESP_LOGW(TAG, "dropped mqtt enqueue! (wifi disabled)");
 #else
-    assert(esp_mqtt_client_publish(client, topic, msg, 0, qos, retain) >= 0);
+    assert(esp_mqtt_client_enqueue(client, topic, msg, 0, qos, retain, true) >= 0);
 #endif
 }
 
-void libiot_mqtt_publish_local(const char *topic_suffix, int qos, int retain, const char *msg) {
+void libiot_mqtt_enqueue_local(const char *topic_suffix, int qos, int retain, const char *msg) {
     char topic_buff[TOPIC_BUFF_SIZE];
-    build_full_topic_suffix(topic_buff, sizeof(topic_buff), topic_suffix);
-    libiot_mqtt_publish(topic_buff, qos, retain, msg);
+    libiot_mqtt_build_local_topic_from_suffix(topic_buff, sizeof(topic_buff), topic_suffix);
+    libiot_mqtt_enqueue(topic_buff, qos, retain, msg);
 }
 
-void libiot_mqtt_publishv_local(const char *topic_suffix, int qos, int retain, const char *fmt, va_list va) {
+void libiot_mqtt_enqueuev_local(const char *topic_suffix, int qos, int retain, const char *fmt, va_list va) {
     char *msg;
     if (vasprintf(&msg, fmt, va) < 0) {
         return;
     }
 
-    libiot_mqtt_publish_local(topic_suffix, qos, retain, msg);
+    libiot_mqtt_enqueue_local(topic_suffix, qos, retain, msg);
 
     free(msg);
 }
 
-void libiot_mqtt_publishf_local(const char *topic_suffix, int qos, int retain, const char *fmt, ...) {
+void libiot_mqtt_enqueuef_local(const char *topic_suffix, int qos, int retain, const char *fmt, ...) {
     va_list va;
     va_start(va, fmt);
 
-    libiot_mqtt_publishv_local(topic_suffix, qos, retain, fmt, va);
+    libiot_mqtt_enqueuev_local(topic_suffix, qos, retain, fmt, va);
 
     va_end(va);
 }

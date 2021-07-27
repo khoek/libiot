@@ -4,6 +4,6 @@
 #include "private.h"
 
 // Returns when WiFi has connected succesfully.
-void wifi_init(const char *ssid, const char *pass, const char *name, wifi_ps_type_t ps_type);
+void wifi_start(const char *ssid, const char *pass, const char *name, wifi_ps_type_t ps_type);
 
 #endif

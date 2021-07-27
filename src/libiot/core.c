@@ -48,7 +48,7 @@ static esp_err_t spiffs_init() {
     return ret;
 }
 
-static void libiot_run(const node_config_t *cfg) {
+static void run_app(const node_config_t *cfg) {
     ESP_LOGI(TAG, "startup");
 
     reset_info_init();
@@ -62,14 +62,22 @@ static void libiot_run(const node_config_t *cfg) {
     ESP_ERROR_CHECK(ota_init());
 #endif
 
+    // Called even if wifi/mqtt will not be started in order to initialize logging structures before
+    // calls to access them may be made during `cfg->app_init`.
+    mqtt_init(cfg->name);
+
+    if (cfg->app_init) {
+        cfg->app_init();
+    }
+
 #ifndef LIBIOT_DISABLE_WIFI
     ESP_LOGI(TAG, "init wifi/mqtt");
     if (cfg->ssid) {
-        wifi_init(cfg->ssid, cfg->pass, cfg->name, cfg->ps_type);
+        wifi_start(cfg->ssid, cfg->pass, cfg->name, cfg->ps_type);
 
         // Note that if `cfg->mqtt_task_stack_size == 0` then a default is used.
         if (cfg->uri) {
-            mqtt_init(cfg->uri, cfg->cert, cfg->key, cfg->name, cfg->mqtt_pass, cfg->mqtt_task_stack_size, cfg->mqtt_cb);
+            mqtt_start(cfg->uri, cfg->cert, cfg->key, cfg->name, cfg->mqtt_pass, cfg->mqtt_task_stack_size, cfg->mqtt_cb);
         } else {
             ESP_LOGI(TAG, "mqtt disabled");
         }
@@ -79,20 +87,23 @@ static void libiot_run(const node_config_t *cfg) {
 #endif
 
     ESP_LOGI(TAG, "startup finished, calling app_run()");
-    cfg->app_run();
+    if (cfg->app_run) {
+        cfg->app_run();
+    }
     ESP_LOGI(TAG, "app_run() returned, cleaning up");
 }
 
 static void task_run(void *arg) {
-    libiot_run((const node_config_t *) arg);
+    run_app((const node_config_t *) arg);
 
     vTaskDelete(NULL);
 }
 
 #define STARTUP_TASK_STACK_SIZE 32768
+#define STARTUP_TASK_PRIORITY 5
 
 void libiot_startup(const node_config_t *cfg) {
-    xTaskCreate(&task_run, "libiot_run", STARTUP_TASK_STACK_SIZE, (void *) cfg, 5, NULL);
+    xTaskCreate(&task_run, "libiot_run_app", STARTUP_TASK_STACK_SIZE, (void *) cfg, STARTUP_TASK_PRIORITY, NULL);
 }
 
 void libiot_logf_error(const char *tag, const char *format, ...) {
@@ -105,7 +116,7 @@ void libiot_logf_error(const char *tag, const char *format, ...) {
     va_end(va);
 
     ESP_LOGE(tag, "%s", msg);
-    libiot_mqtt_publishf_local(MQTT_TOPIC_INFO("error"), 2, 0, "%s: %s", tag, msg);
+    libiot_mqtt_enqueuef_local(MQTT_TOPIC_INFO("error"), 2, 0, "%s: %s", tag, msg);
 
     free(msg);
 }
