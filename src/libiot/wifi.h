@@ -1,9 +1,7 @@
-#ifndef __LIB__LIBIOT_WIFI_H
-#define __LIB__LIBIOT_WIFI_H
+#pragma once
 
 #include "private.h"
 
 // Returns when WiFi has connected succesfully.
-void wifi_start(const char *ssid, const char *pass, const char *name, wifi_ps_type_t ps_type);
-
-#endif
+void libiot_start_wifi(const char *ssid, const char *pass, const char *name,
+                       wifi_ps_type_t ps_type);

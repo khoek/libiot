@@ -1,9 +1,6 @@
-#ifndef __LIB__LIBIOT_OTA_H
-#define __LIB__LIBIOT_OTA_H
+#pragma once
 
 #include "private.h"
 
-void ota_dispatch_request(char *manifest_json);
-esp_err_t ota_init();
-
-#endif
+esp_err_t libiot_init_ota();
+void libiot_ota_dispatch_request(char *manifest_json);

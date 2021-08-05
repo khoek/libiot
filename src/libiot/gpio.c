@@ -4,11 +4,11 @@
 
 #define LED_PIN GPIO_NUM_13
 
-void gpio_led_set_state(bool enabled) {
+void libiot_gpio_led_set_state(bool enabled) {
     gpio_set_level(LED_PIN, enabled ? 1 : 0);
 }
 
-void gpio_init() {
+void libiot_init_gpio() {
     gpio_config_t io_conf;
     io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_OUTPUT;
@@ -17,5 +17,5 @@ void gpio_init() {
     io_conf.pull_up_en = 0;
     gpio_config(&io_conf);
 
-    gpio_led_set_state(false);
+    libiot_gpio_led_set_state(false);
 }

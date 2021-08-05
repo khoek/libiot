@@ -22,7 +22,8 @@ static QueueHandle_t ota_cmd_queue;
 
 static bool perform_update(const char *url, const char *ca_cert_pem) {
     ESP_LOGI(TAG, "ota: start (%s)", url);
-    libiot_mqtt_enqueuef_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"start\"}");
+    libiot_mqtt_publishf_local(MQTT_TOPIC_INFO("ota"), 2, 0,
+                               "{\"state\":\"start\"}");
 
     esp_err_t err;
     const char *fail_msg = NULL;
@@ -31,7 +32,8 @@ static bool perform_update(const char *url, const char *ca_cert_pem) {
         .url = url,
         .cert_pem = (char *) ca_cert_pem,
         .timeout_ms = RECV_TIMEOUT_MS,
-        .buffer_size_tx = 1024,  // Note: needed for chunky google cloud signed URLs
+        .buffer_size_tx =
+            1024,  // Note: needed for chunky google cloud signed URLs
         .keep_alive_enable = true,
     };
 
@@ -56,15 +58,18 @@ static bool perform_update(const char *url, const char *ca_cert_pem) {
             break;
         }
 
-        // Note `esp_https_ota_perform` returns after every read operation, and needs to be called again
-        // until it does not return `ESP_ERR_HTTPS_OTA_IN_PROGRESS`.
+        // Note `esp_https_ota_perform` returns after every read operation, and
+        // needs to be called again until it does not return
+        // `ESP_ERR_HTTPS_OTA_IN_PROGRESS`.
 
         uint32_t byte_count = esp_https_ota_get_image_len_read(handle);
         int32_t milestone_count = byte_count / MILESTONE_BYTES;
         if (milestone_count > last_milestone_count) {
             uint32_t kb_count = byte_count / 1000;
             ESP_LOGI(TAG, "ota: read %d kB", kb_count);
-            libiot_mqtt_enqueuef_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"in_progress\", \"rx_kb\":%d}", kb_count);
+            libiot_mqtt_publishf_local(
+                MQTT_TOPIC_INFO("ota"), 2, 0,
+                "{\"state\":\"in_progress\", \"rx_kb\":%d}", kb_count);
             last_milestone_count = milestone_count;
         }
     }
@@ -91,7 +96,8 @@ static bool perform_update(const char *url, const char *ca_cert_pem) {
     }
 
     ESP_LOGI(TAG, "ota: upgrade successful");
-    libiot_mqtt_enqueuef_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"done\"}");
+    libiot_mqtt_publishf_local(MQTT_TOPIC_INFO("ota"), 2, 0,
+                               "{\"state\":\"done\"}");
     return true;
 
 ota_end:
@@ -99,7 +105,8 @@ ota_end:
 
 ota_end_skip_abort:
     libiot_logf_error(TAG, "ota: %s (0x%X)", fail_msg ? fail_msg : "???", err);
-    libiot_mqtt_enqueuef_local(MQTT_TOPIC_INFO("ota"), 2, 0, "{\"state\":\"fail\"}");
+    libiot_mqtt_publishf_local(MQTT_TOPIC_INFO("ota"), 2, 0,
+                               "{\"state\":\"fail\"}");
     return false;
 }
 
@@ -109,7 +116,8 @@ static const char *process_cmd_update(const cJSON *json_root) {
         return "update: no `url` or not a string!";
     }
 
-    const cJSON *json_ca_cert = cJSON_GetObjectItemCaseSensitive(json_root, "ca_cert");
+    const cJSON *json_ca_cert =
+        cJSON_GetObjectItemCaseSensitive(json_root, "ca_cert");
     if (!json_ca_cert || !cJSON_IsString(json_ca_cert)) {
         return "update: no `ca_cert` or not a string!";
     }
@@ -122,7 +130,8 @@ static const char *process_cmd_update(const cJSON *json_root) {
 static const char *process_cmd_validate(const cJSON *json_root) {
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     if (err != ESP_OK) {
-        libiot_logf_error(TAG, "ota: validate failed with error code (0x%X)", err);
+        libiot_logf_error(TAG, "ota: validate failed with error code (0x%X)",
+                          err);
     }
 
     return NULL;
@@ -131,7 +140,8 @@ static const char *process_cmd_validate(const cJSON *json_root) {
 static const char *process_cmd_rollback(const cJSON *json_root) {
     esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
     if (err != ESP_OK) {
-        libiot_logf_error(TAG, "ota: rollback failed with error code (0x%X)", err);
+        libiot_logf_error(TAG, "ota: rollback failed with error code (0x%X)",
+                          err);
     }
 
     return NULL;
@@ -148,7 +158,8 @@ static void process_cmd(const char *manifest_json) {
         goto process_cmd_out;
     }
 
-    const cJSON *json_type = cJSON_GetObjectItemCaseSensitive(json_root, "type");
+    const cJSON *json_type =
+        cJSON_GetObjectItemCaseSensitive(json_root, "type");
     if (!json_type || !cJSON_IsString(json_type)) {
         fail_msg = "no `type` or not a string!";
         goto process_cmd_out;
@@ -176,20 +187,22 @@ process_cmd_out:
 static void task_run(void *unused) {
     while (1) {
         char *cmd_json;
-        while (xQueueReceive(ota_cmd_queue, &cmd_json, portMAX_DELAY) == pdFALSE)
+        while (xQueueReceive(ota_cmd_queue, &cmd_json, portMAX_DELAY)
+               == pdFALSE)
             ;
 
         process_cmd(cmd_json);
         free(cmd_json);
 
         // Refresh the published partition states
-        mqtt_send_refresh_resp();
+        libiot_mqtt_send_refresh_resp();
     }
 }
 
-void ota_dispatch_request(char *cmd_json) {
+void libiot_ota_dispatch_request(char *cmd_json) {
     if (!ota_cmd_queue) {
-        libiot_logf_error(TAG, "ota: dispatch request with ota not initialized!");
+        libiot_logf_error(TAG,
+                          "ota: dispatch request with ota not initialized!");
         return;
     }
 
@@ -198,10 +211,13 @@ void ota_dispatch_request(char *cmd_json) {
     }
 }
 
-esp_err_t ota_init() {
-    ota_cmd_queue = xQueueCreateStatic(QUEUE_LENGTH, sizeof(char *), ota_cmd_queue_buff, &ota_cmd_queue_static);
+esp_err_t libiot_init_ota() {
+    ota_cmd_queue =
+        xQueueCreateStatic(QUEUE_LENGTH, sizeof(char *), ota_cmd_queue_buff,
+                           &ota_cmd_queue_static);
 
-    if (xTaskCreate(task_run, "ota_task", TASK_STACK_DEPTH, NULL, 5, NULL) != pdPASS) {
+    if (xTaskCreate(task_run, "ota_task", TASK_STACK_DEPTH, NULL, 5, NULL)
+        != pdPASS) {
         return ESP_FAIL;
     }
 

@@ -1,9 +1,6 @@
-#ifndef __LIB__LIBIOT_GPIO_H
-#define __LIB__LIBIOT_GPIO_H
+#pragma once
 
 #include "private.h"
 
-void gpio_init();
-void gpio_led_set_state(bool enabled);
-
-#endif
+void libiot_init_gpio();
+void libiot_gpio_led_set_state(bool enabled);

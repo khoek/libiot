@@ -1,8 +1,7 @@
-#ifndef __LIB__LIBIOT_PRIVATE_H
-#define __LIB__LIBIOT_PRIVATE_H
+#pragma once
+
+#include <sys/cdefs.h>
 
 #include "libiot.h"
 
-__attribute__((unused)) static const char *TAG = "libiot";
-
-#endif
+static __unused const char *TAG = "libiot";

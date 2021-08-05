@@ -1,5 +1,4 @@
-#ifndef __LIB__LIBIOT_RESET_INFO_H
-#define __LIB__LIBIOT_RESET_INFO_H
+#pragma once
 
 #include <esp_system.h>
 
@@ -11,7 +10,5 @@ typedef struct reset_info {
     bool exceptional;
 } reset_info_t;
 
-void reset_info_init();
-reset_info_t *reset_info_get();
-
-#endif
+void libiot_init_reset_info();
+reset_info_t *libiot_reset_info_get();
