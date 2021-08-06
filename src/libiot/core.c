@@ -3,6 +3,7 @@
 #include <esp_spiffs.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <libesp.h>
 #include <nvs_flash.h>
 #include <stdio.h>
 #include <sys/cdefs.h>
@@ -10,13 +11,37 @@
 #include "gpio.h"
 #include "libiot.h"
 #include "mqtt.h"
+#include "ota.h"
 #include "reset_info.h"
 #include "sntp.h"
 #include "wifi.h"
 
-#ifndef LIBIOT_DISABLE_OTA
-#include "ota.h"
-#endif
+static char *instance_uuid = NULL;
+static uint64_t start_epoch_time_ms = 0;
+
+const char *libiot_get_instance_uuid() {
+    return instance_uuid;
+}
+
+uint64_t libiot_get_start_epoch_time_ms() {
+    return start_epoch_time_ms;
+}
+
+// Must be called after `start_sntp()`.
+static void init_id() {
+    uuid_t uuid;
+    util_generate_uuid4(&uuid);
+    util_print_uuid(&instance_uuid, &uuid);
+
+    uint64_t current_ms = util_current_epoch_time_ms();
+    uint64_t uptime_ms = esp_timer_get_time() / 1000;
+    if (uptime_ms > current_ms) {
+        current_ms = 0;
+    } else {
+        current_ms -= uptime_ms;
+    }
+    start_epoch_time_ms = current_ms;
+}
 
 static esp_err_t init_nvs() {
     ESP_LOGI(TAG, "init");
@@ -82,6 +107,11 @@ static void run_app(const node_config_t *cfg) {
         libiot_start_wifi(cfg->ssid, cfg->pass, cfg->name, cfg->ps_type);
 
         libiot_init_sntp();
+        // This function blocks until the network time has been synced for the
+        // first time.
+        libiot_start_sntp();
+
+        init_id();
 
         // Note that if `cfg->mqtt_task_stack_size == 0` then a default is used.
         if (cfg->uri) {
@@ -91,9 +121,6 @@ static void run_app(const node_config_t *cfg) {
         } else {
             ESP_LOGI(TAG, "mqtt disabled");
         }
-
-        // This function blocks until the network time has been received.
-        libiot_start_sntp();
     } else {
         ESP_LOGW(
             TAG,

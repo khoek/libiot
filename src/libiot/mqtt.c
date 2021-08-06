@@ -46,7 +46,7 @@ void libiot_mqtt_send_ping_resp() {
 }
 
 void libiot_mqtt_send_refresh_resp() {
-    send_resp(MQTT_TOPIC_INFO("id"), libiot_json_build_system_id(), true);
+    send_resp(MQTT_TOPIC_INFO("info"), libiot_json_build_system_id(), true);
 }
 
 void libiot_mqtt_send_mem_check_resp() {
@@ -107,8 +107,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             // Publish device hardware information and the last reset reason
             libiot_mqtt_send_refresh_resp();
             if (first_connect) {
-                send_resp(MQTT_TOPIC_INFO("last_reset"),
-                          libiot_json_build_last_reset(), true);
+                send_resp(MQTT_TOPIC_INFO("startup"),
+                          libiot_json_build_startup(), true);
                 first_connect = false;
             }
 

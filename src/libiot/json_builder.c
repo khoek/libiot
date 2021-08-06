@@ -4,7 +4,9 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
+#include <libesp.h>
 #include <libesp/json.h>
 
 #include "reset_info.h"
@@ -36,6 +38,11 @@ char *libiot_json_build_state_up() {
     cJSON_CREATE_ROOT_OBJ_OR_GOTO(&json_root, json_fail);
     cJSON_INSERT_STRINGREF_INTO_OBJ_OR_GOTO(json_root, "state", "up",
                                             json_fail);
+    cJSON_INSERT_STRINGREF_INTO_OBJ_OR_GOTO(json_root, "instance_uuid",
+                                            libiot_get_instance_uuid(),
+                                            json_fail);
+    cJSON_INSERT_NUMBER_INTO_OBJ_OR_GOTO(json_root, "uptime_us",
+                                         esp_timer_get_time(), json_fail);
 
     cJSON *json_wifi;
     cJSON_INSERT_OBJ_INTO_OBJ_OR_GOTO(json_root, "wifi", &json_wifi, json_fail);
@@ -63,6 +70,36 @@ char *libiot_json_build_state_down() {
     cJSON_CREATE_ROOT_OBJ_OR_GOTO(&json_root, json_fail);
     cJSON_INSERT_STRINGREF_INTO_OBJ_OR_GOTO(json_root, "state", "down",
                                             json_fail);
+    cJSON_INSERT_STRINGREF_INTO_OBJ_OR_GOTO(json_root, "instance_uuid",
+                                            libiot_get_instance_uuid(),
+                                            json_fail);
+
+    char *msg = cJSON_PrintUnformatted(json_root);
+    cJSON_Delete(json_root);
+    return msg;
+
+json_fail:
+    ESP_LOGE(TAG, "%s: JSON fail", __func__);
+
+    // It is safe to call this with `json_root == NULL`.
+    cJSON_Delete(json_root);
+    return NULL;
+}
+
+char *libiot_json_build_startup() {
+    reset_info_t *reset_info = libiot_reset_info_get();
+
+    cJSON *json_root;
+    cJSON_CREATE_ROOT_OBJ_OR_GOTO(&json_root, json_fail);
+    cJSON_INSERT_NUMBER_INTO_OBJ_OR_GOTO(json_root, "start_epoch_time_ms",
+                                         libiot_get_start_epoch_time_ms(),
+                                         json_fail);
+    cJSON_INSERT_STRINGREF_INTO_OBJ_OR_GOTO(json_root, "reason",
+                                            reset_info->reason, json_fail);
+    cJSON_INSERT_NUMBER_INTO_OBJ_OR_GOTO(json_root, "code", reset_info->raw,
+                                         json_fail);
+    cJSON_INSERT_BOOL_INTO_OBJ_OR_GOTO(json_root, "exceptional",
+                                       reset_info->exceptional, json_fail);
 
     char *msg = cJSON_PrintUnformatted(json_root);
     cJSON_Delete(json_root);
@@ -616,30 +653,6 @@ char *libiot_json_build_system_id() {
                                                       json_fail);
         }
     }
-
-    char *msg = cJSON_PrintUnformatted(json_root);
-    cJSON_Delete(json_root);
-    return msg;
-
-json_fail:
-    ESP_LOGE(TAG, "%s: JSON fail", __func__);
-
-    // It is safe to call this with `json_root == NULL`.
-    cJSON_Delete(json_root);
-    return NULL;
-}
-
-char *libiot_json_build_last_reset() {
-    reset_info_t *reset_info = libiot_reset_info_get();
-
-    cJSON *json_root;
-    cJSON_CREATE_ROOT_OBJ_OR_GOTO(&json_root, json_fail);
-    cJSON_INSERT_STRINGREF_INTO_OBJ_OR_GOTO(json_root, "reason",
-                                            reset_info->reason, json_fail);
-    cJSON_INSERT_NUMBER_INTO_OBJ_OR_GOTO(json_root, "code", reset_info->raw,
-                                         json_fail);
-    cJSON_INSERT_BOOL_INTO_OBJ_OR_GOTO(json_root, "exceptional",
-                                       reset_info->exceptional, json_fail);
 
     char *msg = cJSON_PrintUnformatted(json_root);
     cJSON_Delete(json_root);

@@ -1,6 +1,6 @@
 {
     "name": "libiot",
-    "version": "3.0.0",
+    "version": "4.0.0",
     "description": "A library built on esp-idf for autoconfiguration of IOT nodes.",
     "keywords": "iot, node, mqtt, runtime, configuration, esp-idf, esp32, esp8266",
     "repository": {
@@ -19,6 +19,6 @@
     "frameworks": "espidf",
     "platforms": "espressif32",
     "dependencies": {
-        "khoek/libesp": "^2.2.0"
+        "khoek/libesp": "^2.3.0"
     }
 }

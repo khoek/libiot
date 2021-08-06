@@ -77,6 +77,12 @@ typedef struct node_config {
 
 void libiot_startup(const node_config_t *cfg);
 
+// Returns NULL if called before `app_run()` has been invoked.
+const char *libiot_get_instance_uuid();
+
+// Returns 0 if called before `app_run()` has been invoked.
+uint64_t libiot_get_start_epoch_time_ms();
+
 // Send: * an error to the console
 //       * an mqtt message to 'hoek/iot/<device_name>/_info/error'.
 //
